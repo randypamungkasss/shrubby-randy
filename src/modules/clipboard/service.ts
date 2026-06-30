@@ -1,32 +1,13 @@
 import { spawn } from "node:child_process";
-
-export type CopyMethod = "pbcopy" | "tmux";
-
-export type CopyFailure = {
-  readonly method: CopyMethod;
-  readonly message: string;
-};
-
-export type CopyPathResult = {
-  readonly path: string;
-  readonly copiedTo: readonly CopyMethod[];
-  readonly failures: readonly CopyFailure[];
-};
-
-type RunCommandOptions = {
-  readonly input?: string;
-};
-
-type RunCommand = (
-  command: string,
-  args: readonly string[],
-  options?: RunCommandOptions,
-) => Promise<void>;
-
-type CopyPathOptions = {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly runCommand?: RunCommand;
-};
+import type {
+  CopyFailure,
+  CopyMethod,
+  CopyPathOptions,
+  CopyPathResult,
+  RunCommand,
+  RunCommandOptions,
+  TryCopyOptions,
+} from "./types.js";
 
 export class CopyPathError extends Error {
   readonly result: CopyPathResult;
@@ -90,15 +71,7 @@ async function tryCopy({
   input,
   method,
   runCommand,
-}: {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly copiedTo: CopyMethod[];
-  readonly failures: CopyFailure[];
-  readonly input?: string;
-  readonly method: CopyMethod;
-  readonly runCommand: RunCommand;
-}): Promise<void> {
+}: TryCopyOptions): Promise<void> {
   try {
     await runCommand(command, args, { input });
     copiedTo.push(method);

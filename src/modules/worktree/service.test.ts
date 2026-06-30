@@ -11,9 +11,13 @@ import {
   getRepoContext,
   listWorktrees,
   removeWorktree,
-  type RepoContext,
-  type WorktreeEntry,
 } from "./service.js";
+import type {
+  GitResult,
+  RepoContext,
+  RepoFixture,
+  WorktreeEntry,
+} from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -231,11 +235,6 @@ test("converts branch names to stable path slugs", () => {
   assert.equal(branchToSlug("release/2026.06"), "release--2026.06");
 });
 
-type RepoFixture = {
-  readonly parentDir: string;
-  readonly repoRoot: string;
-};
-
 async function withRepo(
   callback: (fixture: RepoFixture) => Promise<void>,
 ): Promise<void> {
@@ -275,7 +274,7 @@ async function findWorktree(
 async function git(
   cwd: string,
   args: readonly string[],
-): Promise<{ readonly stdout: string; readonly stderr: string }> {
+): Promise<GitResult> {
   const { stdout, stderr } = await execFileAsync("git", [...args], { cwd });
 
   return { stdout, stderr };

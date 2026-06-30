@@ -3,21 +3,22 @@ import { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { useMenuNavigation } from "../../lib/use-menu-navigation.js";
 import type {
-  CreateWorktreeResult,
+  CopyFeedback,
+  CopyFeedbackViewProps,
+  CreateWorktreeScreenProps,
+  DeletePromptColor,
+  DeleteWarningLinesProps,
+  MessageScreenProps,
   RepoContext,
+  UseTextInputOptions,
+  VisibleEntries,
   WorktreeEntry,
-} from "./service.js";
+  WorktreeListScreenProps,
+  WorktreeRowProps,
+} from "./types.js";
 import { isProtectedBranch } from "./service.js";
 
 const MAX_VISIBLE_WORKTREES = 4;
-
-type CreateWorktreeScreenProps = {
-  readonly context: RepoContext;
-  readonly errorMessage?: string;
-  readonly isCreating: boolean;
-  readonly onSubmit: (branch: string) => void;
-  readonly result?: CreateWorktreeResult;
-};
 
 export function CreateWorktreeScreen({
   context,
@@ -80,20 +81,6 @@ export function CreateWorktreeScreen({
     </Box>
   );
 }
-
-type WorktreeListScreenProps = {
-  readonly context: RepoContext;
-  readonly copyFeedback?: CopyFeedback;
-  readonly deleteErrorMessage?: string;
-  readonly deleteMessage?: string;
-  readonly errorMessage?: string;
-  readonly isDeleting: boolean;
-  readonly isLoading: boolean;
-  readonly onCopy?: (worktree: WorktreeEntry) => void;
-  readonly onDelete?: (worktree: WorktreeEntry) => void;
-  readonly title?: string;
-  readonly worktrees: readonly WorktreeEntry[];
-};
 
 export function WorktreeListScreen({
   context,
@@ -229,10 +216,7 @@ function canDeleteWorktree(context: RepoContext, worktree: WorktreeEntry): boole
 function DeleteWarningLines({
   context,
   worktree,
-}: {
-  readonly context: RepoContext;
-  readonly worktree: WorktreeEntry;
-}) {
+}: DeleteWarningLinesProps) {
   return (
     <Box flexDirection="column">
       {worktree.isCurrent ? (
@@ -267,7 +251,7 @@ function DeleteWarningLines({
 function getDeletePromptColor(
   context: RepoContext,
   worktree: WorktreeEntry,
-): "cyan" | "yellow" {
+): DeletePromptColor {
   return worktree.isCurrent ||
     isProtectedBranch(context, worktree) ||
     worktree.isDirty ||
@@ -276,19 +260,6 @@ function getDeletePromptColor(
     ? "yellow"
     : "cyan";
 }
-
-export type CopyFeedback = {
-  readonly errorMessage?: string;
-  readonly isCopying?: boolean;
-  readonly message?: string;
-  readonly warningMessage?: string;
-};
-
-type MessageScreenProps = {
-  readonly color?: "cyan" | "red" | "yellow";
-  readonly detail?: string;
-  readonly title: string;
-};
 
 export function MessageScreen({ color = "cyan", detail, title }: MessageScreenProps) {
   return (
@@ -305,7 +276,7 @@ export function MessageScreen({ color = "cyan", detail, title }: MessageScreenPr
   );
 }
 
-function CopyFeedbackView({ feedback }: { readonly feedback?: CopyFeedback }) {
+function CopyFeedbackView({ feedback }: CopyFeedbackViewProps) {
   if (feedback === undefined) {
     return undefined;
   }
@@ -343,11 +314,6 @@ function CopyFeedbackView({ feedback }: { readonly feedback?: CopyFeedback }) {
   );
 }
 
-type WorktreeRowProps = {
-  readonly isSelected: boolean;
-  readonly worktree: WorktreeEntry;
-};
-
 function WorktreeRow({ isSelected, worktree }: WorktreeRowProps) {
   const branch = worktree.branch ?? "(detached)";
   const state = worktree.isPrunable ? "missing" : worktree.isDirty ? "dirty" : "clean";
@@ -376,12 +342,7 @@ function useTextInput({
   onChange,
   onSubmit,
   value,
-}: {
-  readonly isEnabled: boolean;
-  readonly onChange: (value: string) => void;
-  readonly onSubmit: (value: string) => void;
-  readonly value: string;
-}): void {
+}: UseTextInputOptions): void {
   useInput((input, key) => {
     if (!isEnabled) {
       return;
@@ -420,14 +381,7 @@ function displayPath(worktreePath: string): string {
 function getVisibleEntries<T>(
   items: readonly T[],
   selectedIndex: number,
-): {
-  readonly entries: readonly {
-    readonly index: number;
-    readonly item: T;
-  }[];
-  readonly end: number;
-  readonly start: number;
-} {
+): VisibleEntries<T> {
   if (items.length <= MAX_VISIBLE_WORKTREES) {
     return {
       entries: items.map((item, index) => ({ index, item })),

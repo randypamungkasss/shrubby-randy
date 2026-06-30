@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 import { ShrubbyLogo } from "../../components/shrubby-logo.js";
 import { useMenuNavigation } from "../../lib/use-menu-navigation.js";
-import type { RepoContext } from "../worktree/service.js";
+import type { MainMenuItem, MainMenuProps } from "./types.js";
 
 const MENU_ITEMS = [
   {
@@ -19,15 +19,7 @@ const MENU_ITEMS = [
     label: "Refresh",
     description: "Reload repository and worktree state.",
   },
-] as const;
-
-export type MainMenuItem = (typeof MENU_ITEMS)[number];
-
-type MainMenuProps = {
-  readonly context: RepoContext;
-  readonly onChoose: (item: MainMenuItem) => void;
-  readonly statusMessage?: string;
-};
+] as const satisfies readonly MainMenuItem[];
 
 export function MainMenu({
   context,

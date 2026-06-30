@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CopyPathError, copyPath } from "./service.js";
+import type {
+  CommandCall,
+  CreateRunnerOptions,
+  RunCommandOptions,
+} from "./types.js";
 
 test("copies to pbcopy by default", async () => {
   const calls: CommandCall[] = [];
@@ -77,23 +82,14 @@ test("fails when every copy destination fails", async () => {
   );
 });
 
-type CommandCall = {
-  readonly args: readonly string[];
-  readonly command: string;
-  readonly input: string | undefined;
-};
-
 function createRunner({
   calls = [],
   failures = {},
-}: {
-  readonly calls?: CommandCall[];
-  readonly failures?: Partial<Record<string, Error>>;
-} = {}) {
+}: CreateRunnerOptions = {}) {
   return async (
     command: string,
     args: readonly string[],
-    options: { readonly input?: string } = {},
+    options: RunCommandOptions = {},
   ): Promise<void> => {
     calls.push({
       args: [...args],

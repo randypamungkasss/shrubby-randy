@@ -1,26 +1,26 @@
 import { useEffect, useState } from "react";
 import { useWindowSize } from "ink";
 import { FullscreenFrame } from "../components/fullscreen-frame.js";
-import { MainMenu, type MainMenuItem } from "../modules/main-menu/view.js";
-import {
-  CopyPathError,
-  copyPath,
-  type CopyPathResult,
-} from "../modules/clipboard/service.js";
+import { MainMenu } from "../modules/main-menu/view.js";
+import type { MainMenuItem } from "../modules/main-menu/types.js";
+import { CopyPathError, copyPath } from "../modules/clipboard/service.js";
+import type { CopyPathResult } from "../modules/clipboard/types.js";
 import {
   createWorktree,
   getRepoContext,
   listWorktrees,
   removeWorktree,
-  type CreateWorktreeResult,
-  type RepoContext,
-  type WorktreeEntry,
 } from "../modules/worktree/service.js";
+import type {
+  CopyFeedback,
+  CreateWorktreeResult,
+  RepoContext,
+  WorktreeEntry,
+} from "../modules/worktree/types.js";
 import {
   CreateWorktreeScreen,
   MessageScreen,
   WorktreeListScreen,
-  type CopyFeedback,
 } from "../modules/worktree/view.js";
 import { useExitKeys } from "./use-exit-keys.js";
 

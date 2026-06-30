@@ -2,45 +2,18 @@ import { execFile } from "node:child_process";
 import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type {
+  CommandNotFoundFailure,
+  CreateWorktreeResult,
+  GitCommandFailure,
+  GitResult,
+  ParsedWorktree,
+  RepoContext,
+  WorktreeEntry,
+  WorktreeState,
+} from "./types.js";
 
 const execFileAsync = promisify(execFile);
-
-export type RepoContext = {
-  readonly repoRoot: string;
-  readonly projectName: string;
-  readonly protectedBranch: string;
-  readonly worktreeRoot: string;
-  readonly defaultBranch: string;
-};
-
-export type WorktreeEntry = {
-  readonly path: string;
-  readonly branch: string | undefined;
-  readonly head: string | undefined;
-  readonly isCurrent: boolean;
-  readonly isManaged: boolean;
-  readonly isDirty: boolean;
-  readonly isPrunable: boolean;
-};
-
-export type CreateWorktreeResult = {
-  readonly path: string;
-  readonly branch: string;
-  readonly baseRef: string;
-  readonly mode: "existing-local" | "existing-remote" | "new-branch";
-};
-
-type GitResult = {
-  readonly stdout: string;
-  readonly stderr: string;
-};
-
-type ParsedWorktree = {
-  readonly path: string;
-  readonly branch: string | undefined;
-  readonly head: string | undefined;
-  readonly isPrunable: boolean;
-};
 
 export async function getRepoContext(cwd = process.cwd()): Promise<RepoContext> {
   const repoRoot = await getRepoRoot(cwd);
@@ -251,7 +224,7 @@ async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
 
 async function getWorktreeState(
   entry: ParsedWorktree,
-): Promise<{ readonly isDirty: boolean; readonly isPrunable: boolean }> {
+): Promise<WorktreeState> {
   if (entry.isPrunable || !(await pathExists(entry.path))) {
     return {
       isDirty: false,
@@ -379,11 +352,7 @@ async function runGitViaLoginShell(
 }
 
 function formatGitError(error: unknown): Error {
-  const failure = error as Error & {
-    readonly code?: string;
-    readonly stderr?: string;
-    readonly stdout?: string;
-  };
+  const failure = error as GitCommandFailure;
 
   if (isCommandNotFound(failure)) {
     return new Error("Git executable was not found on PATH.");
@@ -399,11 +368,7 @@ function isCommandNotFound(error: unknown): boolean {
     return false;
   }
 
-  const failure = error as {
-    readonly code?: unknown;
-    readonly path?: unknown;
-    readonly syscall?: unknown;
-  };
+  const failure = error as CommandNotFoundFailure;
 
   return (
     failure.code === "ENOENT" &&
