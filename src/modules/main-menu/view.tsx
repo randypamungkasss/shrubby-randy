@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { ManageTreeLogo } from "../../components/manage-tree-logo.js";
+import { ShrubbyLogo } from "../../components/shrubby-logo.js";
 import { useMenuNavigation } from "../../lib/use-menu-navigation.js";
 import type { RepoContext } from "../worktree/service.js";
 
@@ -43,7 +43,7 @@ export function MainMenu({
 
   return (
     <Box flexDirection="column" width={62} gap={1}>
-      <ManageTreeLogo />
+      <ShrubbyLogo />
 
       <Box flexDirection="column">
         <Text dimColor wrap="truncate">

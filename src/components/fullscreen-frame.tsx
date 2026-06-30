@@ -20,7 +20,7 @@ export function FullscreenFrame({
   if (width < 12 || height < 5) {
     return (
       <Box width={width} height={height} overflow="hidden">
-        <Text wrap="truncate">manage-tree</Text>
+        <Text wrap="truncate">shrubby</Text>
       </Box>
     );
   }

@@ -1,11 +1,11 @@
 {
-  "name": "manage-tree",
+  "name": "shrubby",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "type": "module",
   "bin": {
-    "manage-tree": "./dist/cli.js"
+    "shrubby": "./dist/cli.js"
   },
   "scripts": {
     "dev": "pnpm build && node dist/cli.js",

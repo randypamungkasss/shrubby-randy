@@ -240,7 +240,7 @@ async function withRepo(
   callback: (fixture: RepoFixture) => Promise<void>,
 ): Promise<void> {
   const parentDir = await realpath(
-    await mkdtemp(path.join(os.tmpdir(), "manage-tree-")),
+    await mkdtemp(path.join(os.tmpdir(), "shrubby-")),
   );
   const repoRoot = path.join(parentDir, "repo");
 

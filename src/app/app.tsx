@@ -311,18 +311,18 @@ export function App() {
 
 function getFooter(repoStatus: RepoState["status"], screen: Screen): string {
   if (repoStatus !== "ready") {
-    return "q / Esc exit | manage-tree";
+    return "q / Esc exit | shrubby";
   }
 
   if (screen === "create") {
-    return "Type branch | Enter create | Esc back | q exit | manage-tree";
+    return "Type branch | Enter create | Esc back | q exit | shrubby";
   }
 
   if (screen === "list") {
     return "Up/Down | c copy | d delete | y/N confirm | Esc back | q exit";
   }
 
-  return "Up/Down select | Enter choose | q / Esc exit | manage-tree";
+  return "Up/Down select | Enter choose | q / Esc exit | shrubby";
 }
 
 function getErrorMessage(error: unknown): string {

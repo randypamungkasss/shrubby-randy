@@ -1,4 +1,4 @@
-# manage-tree
+# shrubby
 
 Local CLI for managing git worktrees while working across branches.
 
