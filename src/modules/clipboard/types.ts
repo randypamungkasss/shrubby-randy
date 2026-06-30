@@ -1,4 +1,18 @@
-export type CopyMethod = "pbcopy" | "tmux";
+export type CopyMethod =
+  | "clip.exe"
+  | "pbcopy"
+  | "powershell.exe"
+  | "tmux"
+  | "wl-copy"
+  | "xclip"
+  | "xsel";
+
+export type CopyCommandCandidate = {
+  readonly args: readonly string[];
+  readonly command: string;
+  readonly input?: string;
+  readonly method: CopyMethod;
+};
 
 export type CopyFailure = {
   readonly method: CopyMethod;
@@ -23,6 +37,7 @@ export type RunCommand = (
 
 export type CopyPathOptions = {
   readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
   readonly runCommand?: RunCommand;
 };
 

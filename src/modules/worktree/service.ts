@@ -9,6 +9,7 @@ import type {
   GitResult,
   ParsedWorktree,
   RepoContext,
+  ResolveWorktreeTargetOptions,
   WorktreeEntry,
   WorktreeState,
 } from "./types.js";
@@ -116,6 +117,55 @@ export async function listWorktrees(
   );
 }
 
+export async function resolveWorktreeTarget(
+  context: RepoContext,
+  targetName: string,
+  {
+    cwd = process.cwd(),
+    worktrees,
+  }: ResolveWorktreeTargetOptions = {},
+): Promise<WorktreeEntry> {
+  const target = targetName.trim();
+
+  if (target.length === 0) {
+    throw new Error("Worktree target is required.");
+  }
+
+  const entries = worktrees ?? (await listWorktrees(context));
+  const branchMatch = getSingleMatch(
+    target,
+    entries.filter((entry) => entry.branch === target),
+    "branch",
+  );
+
+  if (branchMatch !== undefined) {
+    return branchMatch;
+  }
+
+  const absoluteTarget = path.resolve(cwd, target);
+  const pathMatch = getSingleMatch(
+    target,
+    entries.filter((entry) => path.resolve(entry.path) === absoluteTarget),
+    "path",
+  );
+
+  if (pathMatch !== undefined) {
+    return pathMatch;
+  }
+
+  const basenameMatch = getSingleMatch(
+    target,
+    entries.filter((entry) => path.basename(entry.path) === target),
+    "basename",
+  );
+
+  if (basenameMatch !== undefined) {
+    return basenameMatch;
+  }
+
+  throw new Error(`No worktree matches '${target}'.`);
+}
+
 export async function removeWorktree(
   context: RepoContext,
   worktree: WorktreeEntry,
@@ -159,6 +209,26 @@ export function branchToSlug(branch: string): string {
     .replace(/^-+|-+$/g, "");
 
   return slug.length > 0 ? slug : "worktree";
+}
+
+function getSingleMatch(
+  target: string,
+  matches: readonly WorktreeEntry[],
+  kind: string,
+): WorktreeEntry | undefined {
+  if (matches.length === 0) {
+    return undefined;
+  }
+
+  if (matches.length === 1) {
+    return matches[0];
+  }
+
+  throw new Error(
+    `Ambiguous worktree ${kind} '${target}'. Matches: ${matches
+      .map((entry) => entry.path)
+      .join(", ")}`,
+  );
 }
 
 async function getRepoRoot(cwd: string): Promise<string> {

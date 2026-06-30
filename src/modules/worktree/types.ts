@@ -40,6 +40,11 @@ export type WorktreeState = {
   readonly isPrunable: boolean;
 };
 
+export type ResolveWorktreeTargetOptions = {
+  readonly cwd?: string;
+  readonly worktrees?: readonly WorktreeEntry[];
+};
+
 export type GitCommandFailure = Error & {
   readonly code?: string;
   readonly stderr?: string;

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import {
   getRepoContext,
   listWorktrees,
   removeWorktree,
+  resolveWorktreeTarget,
 } from "./service.js";
 import type {
   GitResult,
@@ -226,6 +227,55 @@ test("deletes broken worktree directories and prunes metadata", async () => {
     assert.equal(
       worktrees.some((worktree) => worktree.path === result.path),
       false,
+    );
+  });
+});
+
+test("resolves worktree targets by branch, path, and basename", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const context = await getRepoContext(repoRoot);
+    const result = await createWorktree(context, "feature/resolve-target");
+
+    const branchMatch = await resolveWorktreeTarget(
+      context,
+      "feature/resolve-target",
+      { cwd: repoRoot },
+    );
+    const pathMatch = await resolveWorktreeTarget(context, result.path, {
+      cwd: repoRoot,
+    });
+    const basenameMatch = await resolveWorktreeTarget(
+      context,
+      path.basename(result.path),
+      { cwd: repoRoot },
+    );
+
+    assert.equal(branchMatch.path, result.path);
+    assert.equal(pathMatch.path, result.path);
+    assert.equal(basenameMatch.path, result.path);
+  });
+});
+
+test("rejects missing and ambiguous worktree targets", async () => {
+  await withRepo(async ({ parentDir, repoRoot }) => {
+    const context = await getRepoContext(repoRoot);
+    const firstParent = path.join(parentDir, "first");
+    const secondParent = path.join(parentDir, "second");
+    const firstPath = path.join(firstParent, "same-name");
+    const secondPath = path.join(secondParent, "same-name");
+
+    await mkdir(firstParent);
+    await mkdir(secondParent);
+    await git(repoRoot, ["worktree", "add", "-b", "same-one", firstPath]);
+    await git(repoRoot, ["worktree", "add", "-b", "same-two", secondPath]);
+
+    await assert.rejects(
+      resolveWorktreeTarget(context, "missing-target", { cwd: repoRoot }),
+      /No worktree matches 'missing-target'/,
+    );
+    await assert.rejects(
+      resolveWorktreeTarget(context, "same-name", { cwd: repoRoot }),
+      /Ambiguous worktree basename 'same-name'/,
     );
   });
 });
