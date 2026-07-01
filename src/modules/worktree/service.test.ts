@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { promisify } from "node:util";
 import {
   branchToSlug,
+  cleanupWorktrees,
   createWorktree,
   getRepoContext,
   listWorktrees,
@@ -34,6 +35,59 @@ test("detects repo context and parent .worktrees location", async () => {
   });
 });
 
+test("loads user and repo config with repo precedence", async () => {
+  await withRepo(async ({ parentDir, repoRoot }) => {
+    const homeDir = path.join(parentDir, "home");
+    const configDir = path.join(homeDir, ".config", "shrubby");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      path.join(configDir, "config.json"),
+      JSON.stringify({
+        copyOnCreate: false,
+        editorCommand: "vim",
+        fetchBeforeCreate: true,
+        protectedBranches: ["develop"],
+        worktreeRoot: "~/user-worktrees",
+      }),
+    );
+    await writeFile(
+      path.join(repoRoot, ".shrubby.json"),
+      JSON.stringify({
+        copyOnCreate: true,
+        protectedBranches: ["main", "release"],
+        worktreeRoot: ".repo-worktrees",
+      }),
+    );
+
+    const context = await getRepoContext(repoRoot, { homeDir });
+
+    assert.equal(context.worktreeRoot, path.join(repoRoot, ".repo-worktrees"));
+    assert.deepEqual(context.protectedBranches, ["main", "release"]);
+    assert.equal(context.config.copyOnCreate, true);
+    assert.equal(context.config.defaultBaseRef, "main");
+    assert.equal(context.config.editorCommand, "vim");
+    assert.equal(context.config.fetchBeforeCreate, true);
+  });
+});
+
+test("expands user config worktree roots under home", async () => {
+  await withRepo(async ({ parentDir, repoRoot }) => {
+    const homeDir = path.join(parentDir, "home");
+    const configDir = path.join(homeDir, ".config", "shrubby");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      path.join(configDir, "config.json"),
+      JSON.stringify({
+        worktreeRoot: "~/user-worktrees",
+      }),
+    );
+
+    const context = await getRepoContext(repoRoot, { homeDir });
+
+    assert.equal(context.worktreeRoot, path.join(homeDir, "user-worktrees"));
+  });
+});
+
 test("creates a new branch worktree under the managed root", async () => {
   await withRepo(async ({ parentDir, repoRoot }) => {
     const context = await getRepoContext(repoRoot);
@@ -58,7 +112,67 @@ test("creates a new branch worktree under the managed root", async () => {
   });
 });
 
-test("removes dirty managed worktrees without deleting branches", async () => {
+test("uses a stable hash when branch slugs collide", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const context = await getRepoContext(repoRoot);
+    const first = await createWorktree(context, "feature/foo@bar");
+    const second = await createWorktree(context, "feature/foo-bar");
+
+    assert.equal(path.basename(first.path), "feature--foo-bar");
+    assert.match(
+      path.basename(second.path),
+      /^feature--foo-bar--[a-f0-9]{8}$/,
+    );
+    assert.notEqual(first.path, second.path);
+  });
+});
+
+test("fetches before creating remote-only branch worktrees", async () => {
+  await withRepo(async ({ parentDir, repoRoot }) => {
+    const remotePath = path.join(parentDir, "remote.git");
+    const collaboratorPath = path.join(parentDir, "collaborator");
+
+    await git(parentDir, ["init", "--bare", "-b", "main", remotePath]);
+    await git(repoRoot, ["remote", "add", "origin", remotePath]);
+    await git(repoRoot, ["push", "-u", "origin", "main"]);
+    await git(parentDir, ["clone", remotePath, collaboratorPath]);
+    await git(collaboratorPath, ["config", "user.email", "test@example.com"]);
+    await git(collaboratorPath, ["config", "user.name", "Collaborator Test"]);
+    await git(collaboratorPath, ["checkout", "-b", "remote-only"]);
+    await writeFile(path.join(collaboratorPath, "remote.txt"), "remote\n");
+    await git(collaboratorPath, ["add", "remote.txt"]);
+    await git(collaboratorPath, ["commit", "-m", "remote branch"]);
+    await git(collaboratorPath, ["push", "-u", "origin", "remote-only"]);
+
+    const context = await getRepoContext(repoRoot);
+    const result = await createWorktree(context, "remote-only", { fetch: true });
+
+    assert.equal(result.mode, "existing-remote");
+    assert.equal(result.baseRef, "origin/remote-only");
+  });
+});
+
+test("lists tracking and last commit metadata", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const context = await getRepoContext(repoRoot);
+    const result = await createWorktree(context, "metadata-test");
+    await git(result.path, ["branch", "--set-upstream-to", "main"]);
+    await writeFile(path.join(result.path, "feature.txt"), "feature\n");
+    await git(result.path, ["add", "feature.txt"]);
+    await git(result.path, ["commit", "-m", "feature metadata"]);
+
+    const worktree = await findWorktree(context, result.path);
+
+    assert.equal(worktree.upstream, "main");
+    assert.equal(worktree.ahead, 1);
+    assert.equal(worktree.behind, 0);
+    assert.equal(worktree.lastCommit?.subject, "feature metadata");
+    assert.match(worktree.lastCommit?.hash ?? "", /^[a-f0-9]+$/);
+    assert.match(worktree.lastCommit?.date ?? "", /^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+test("requires force before removing dirty managed worktrees", async () => {
   await withRepo(async ({ repoRoot }) => {
     const context = await getRepoContext(repoRoot);
     const result = await createWorktree(context, "dirty-test");
@@ -67,7 +181,12 @@ test("removes dirty managed worktrees without deleting branches", async () => {
 
     assert.equal(worktree.isDirty, true);
 
-    await removeWorktree(context, worktree);
+    await assert.rejects(
+      removeWorktree(context, worktree),
+      /uncommitted changes/i,
+    );
+
+    await removeWorktree(context, worktree, { forceDirty: true });
 
     const worktrees = await listWorktrees(context);
     assert.equal(
@@ -213,6 +332,38 @@ test("prunes missing worktree entries", async () => {
     await removeWorktree(context, staleWorktree);
 
     const worktrees = await listWorktrees(context);
+    assert.equal(
+      worktrees.some((worktree) => worktree.path === result.path),
+      false,
+    );
+  });
+});
+
+test("cleanup dry-runs and removes clean merged managed worktrees", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const context = await getRepoContext(repoRoot);
+    const result = await createWorktree(context, "cleanup-merged-test");
+    const dryRun = await cleanupWorktrees(context, {
+      dryRun: true,
+      includeMerged: true,
+      includeStale: false,
+    });
+
+    assert.equal(dryRun.dryRun, true);
+    assert.equal(dryRun.removed, false);
+    assert.equal(
+      dryRun.entries.some((entry) => entry.worktree.path === result.path),
+      true,
+    );
+
+    const cleanup = await cleanupWorktrees(context, {
+      dryRun: false,
+      includeMerged: true,
+      includeStale: false,
+    });
+    const worktrees = await listWorktrees(context);
+
+    assert.equal(cleanup.removed, true);
     assert.equal(
       worktrees.some((worktree) => worktree.path === result.path),
       false,

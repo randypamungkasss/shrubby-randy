@@ -128,7 +128,7 @@ test("removes a worktree with --yes", async () => {
   });
 });
 
-test("removes a dirty worktree with --yes", async () => {
+test("requires --force-dirty to remove dirty worktrees", async () => {
   await withRepo(async ({ repoRoot }) => {
     const created = await createWithCli(repoRoot, "cli-remove-dirty-yes");
     await writeFile(path.join(created.path, "dirty.txt"), "dirty\n");
@@ -136,10 +136,18 @@ test("removes a dirty worktree with --yes", async () => {
     const removeResult = await runCli(["remove", "cli-remove-dirty-yes", "--yes"], {
       cwd: repoRoot,
     });
+    const forceRemoveResult = await runCli(
+      ["remove", "cli-remove-dirty-yes", "--yes", "--force-dirty"],
+      {
+        cwd: repoRoot,
+      },
+    );
     const worktreeList = await git(repoRoot, ["worktree", "list", "--porcelain"]);
 
-    assert.equal(removeResult.code, 0);
-    assert.match(removeResult.stdout, /Removed cli-remove-dirty-yes\./);
+    assert.equal(removeResult.code, 1);
+    assert.match(removeResult.stderr, /without --force-dirty/);
+    assert.equal(forceRemoveResult.code, 0);
+    assert.match(forceRemoveResult.stdout, /Removed cli-remove-dirty-yes\./);
     assert.equal(worktreeList.stdout.includes(created.path), false);
   });
 });
@@ -187,6 +195,80 @@ test("refuses non-interactive remove without --yes", async () => {
     assert.equal(removeResult.code, 1);
     assert.match(removeResult.stderr, /Refusing to remove without --yes/);
     assert.equal(worktreeList.stdout.includes(created.path), true);
+  });
+});
+
+test("opens a resolved worktree with an editor command", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const calls: CommandCall[] = [];
+    const created = await createWithCli(repoRoot, "cli-open");
+    const openResult = await runCli(
+      ["open", "cli-open", "--editor", "code -n", "--json"],
+      {
+        cwd: repoRoot,
+        editorRunCommand: createRunner({ calls }),
+      },
+    );
+    const parsed = JSON.parse(openResult.stdout) as {
+      readonly args: readonly string[];
+      readonly command: string;
+      readonly path: string;
+    };
+
+    assert.equal(openResult.code, 0);
+    assert.equal(parsed.command, "code");
+    assert.deepEqual(parsed.args, ["-n", created.path]);
+    assert.equal(parsed.path, created.path);
+    assert.deepEqual(calls, [
+      {
+        args: ["-n", created.path],
+        command: "code",
+        input: undefined,
+      },
+    ]);
+  });
+});
+
+test("prints shell init helpers", async () => {
+  const result = await runCli(["shell-init", "zsh"]);
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /swd\(\)/);
+  assert.match(result.stdout, /shrubby path "\$1"/);
+  assert.match(result.stdout, /sopen\(\)/);
+});
+
+test("cleanup previews and removes merged worktrees as JSON", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const created = await createWithCli(repoRoot, "cli-cleanup-merged");
+    const dryRunResult = await runCli(
+      ["cleanup", "--dry-run", "--merged", "--json"],
+      { cwd: repoRoot },
+    );
+    const dryRun = JSON.parse(dryRunResult.stdout) as {
+      readonly count: number;
+      readonly dryRun: boolean;
+      readonly entries: readonly { readonly worktree: { readonly path: string } }[];
+    };
+    const cleanupResult = await runCli(
+      ["cleanup", "--merged", "--yes", "--json"],
+      { cwd: repoRoot },
+    );
+    const cleanup = JSON.parse(cleanupResult.stdout) as {
+      readonly removed: boolean;
+    };
+    const worktreeList = await git(repoRoot, ["worktree", "list", "--porcelain"]);
+
+    assert.equal(dryRunResult.code, 0);
+    assert.equal(dryRun.dryRun, true);
+    assert.equal(dryRun.count >= 1, true);
+    assert.equal(
+      dryRun.entries.some((entry) => entry.worktree.path === created.path),
+      true,
+    );
+    assert.equal(cleanupResult.code, 0);
+    assert.equal(cleanup.removed, true);
+    assert.equal(worktreeList.stdout.includes(created.path), false);
   });
 });
 

@@ -1,15 +1,27 @@
+import type { ResolvedShrubbyConfig } from "../config/types.js";
+
 export type RepoContext = {
+  readonly config: ResolvedShrubbyConfig;
   readonly repoRoot: string;
   readonly projectName: string;
   readonly protectedBranch: string;
+  readonly protectedBranches: readonly string[];
   readonly worktreeRoot: string;
   readonly defaultBranch: string;
+};
+
+export type GetRepoContextOptions = {
+  readonly homeDir?: string;
 };
 
 export type WorktreeEntry = {
   readonly path: string;
   readonly branch: string | undefined;
   readonly head: string | undefined;
+  readonly upstream: string | undefined;
+  readonly ahead: number | undefined;
+  readonly behind: number | undefined;
+  readonly lastCommit: WorktreeLastCommit | undefined;
   readonly isCurrent: boolean;
   readonly isManaged: boolean;
   readonly isDirty: boolean;
@@ -36,8 +48,46 @@ export type ParsedWorktree = {
 };
 
 export type WorktreeState = {
+  readonly ahead: number | undefined;
+  readonly behind: number | undefined;
   readonly isDirty: boolean;
   readonly isPrunable: boolean;
+  readonly lastCommit: WorktreeLastCommit | undefined;
+  readonly upstream: string | undefined;
+};
+
+export type WorktreeLastCommit = {
+  readonly date: string;
+  readonly hash: string;
+  readonly subject: string;
+};
+
+export type CreateWorktreeOptions = {
+  readonly fetch?: boolean;
+};
+
+export type RemoveWorktreeOptions = {
+  readonly forceDirty?: boolean;
+};
+
+export type CleanupReason = "merged" | "stale";
+
+export type CleanupEntry = {
+  readonly action: "prune" | "remove";
+  readonly reason: CleanupReason;
+  readonly worktree: WorktreeEntry;
+};
+
+export type CleanupWorktreesOptions = {
+  readonly dryRun?: boolean;
+  readonly includeMerged?: boolean;
+  readonly includeStale?: boolean;
+};
+
+export type CleanupWorktreesResult = {
+  readonly dryRun: boolean;
+  readonly entries: readonly CleanupEntry[];
+  readonly removed: boolean;
 };
 
 export type ResolveWorktreeTargetOptions = {
@@ -82,7 +132,10 @@ export type WorktreeListScreenProps = {
   readonly isDeleting: boolean;
   readonly isLoading: boolean;
   readonly onCopy?: (worktree: WorktreeEntry) => void;
-  readonly onDelete?: (worktree: WorktreeEntry) => void;
+  readonly onDelete?: (
+    worktree: WorktreeEntry,
+    options?: RemoveWorktreeOptions,
+  ) => void;
   readonly title?: string;
   readonly worktrees: readonly WorktreeEntry[];
 };

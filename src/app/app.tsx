@@ -119,7 +119,7 @@ export function App() {
           result={createState.result}
         />
       ) : (
-        <WorktreeListScreen
+      <WorktreeListScreen
           copyFeedback={copyState}
           context={repoState.context}
           deleteErrorMessage={removeState.errorMessage}
@@ -130,8 +130,8 @@ export function App() {
           onCopy={(worktree) => {
             void handleCopy(worktree);
           }}
-          onDelete={(worktree) => {
-            void handleRemove(repoState.context, worktree);
+          onDelete={(worktree, options) => {
+            void handleRemove(repoState.context, worktree, options);
           }}
           worktrees={repoState.worktrees}
         />
@@ -243,7 +243,10 @@ export function App() {
         result,
       });
       setStatusMessage(createdMessage);
-      await copyCreatedWorktreePath(result, createdMessage);
+
+      if (context.config.copyOnCreate) {
+        await copyCreatedWorktreePath(result, createdMessage);
+      }
     } catch (error) {
       setCreateState({
         errorMessage: getErrorMessage(error),
@@ -279,6 +282,7 @@ export function App() {
   async function handleRemove(
     context: RepoContext,
     worktree: WorktreeEntry,
+    options?: { readonly forceDirty?: boolean },
   ): Promise<void> {
     if (removeState.isRemoving) {
       return;
@@ -287,7 +291,7 @@ export function App() {
     setRemoveState({ isRemoving: true });
 
     try {
-      await removeWorktree(context, worktree);
+      await removeWorktree(context, worktree, options);
       const worktrees = await listWorktrees(context);
 
       setRepoState((state) =>
@@ -348,7 +352,7 @@ function getFooter(repoStatus: RepoState["status"], screen: Screen): string {
   }
 
   if (screen === "list") {
-    return "Up/Down | c copy | d delete | y/N confirm | Esc back | q exit";
+    return "Up/Down | / search | c copy | d delete | y/N confirm | Esc back";
   }
 
   return "Up/Down select | Enter choose | q / Esc exit | shrubby";

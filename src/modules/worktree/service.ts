@@ -1,32 +1,66 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, mkdir, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  loadShrubbyConfig,
+  resolveConfiguredPath,
+} from "../config/service.js";
 import type {
+  CleanupEntry,
+  CleanupWorktreesOptions,
+  CleanupWorktreesResult,
   CommandNotFoundFailure,
+  CreateWorktreeOptions,
   CreateWorktreeResult,
+  GetRepoContextOptions,
   GitCommandFailure,
   GitResult,
   ParsedWorktree,
   RepoContext,
+  RemoveWorktreeOptions,
   ResolveWorktreeTargetOptions,
   WorktreeEntry,
+  WorktreeLastCommit,
   WorktreeState,
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export async function getRepoContext(cwd = process.cwd()): Promise<RepoContext> {
+export async function getRepoContext(
+  cwd = process.cwd(),
+  { homeDir = getHomeDir() }: GetRepoContextOptions = {},
+): Promise<RepoContext> {
   const repoRoot = await getRepoRoot(cwd);
   const projectName = path.basename(repoRoot);
-  const worktreeRoot = path.join(path.dirname(repoRoot), ".worktrees", projectName);
-  const defaultBranch = await getDefaultBaseRef(repoRoot);
-  const protectedBranch = normalizeBranchName(defaultBranch);
+  const rawConfig = await loadShrubbyConfig(repoRoot, { homeDir });
+  const defaultBranch =
+    rawConfig.defaultBaseRef ?? (await getDefaultBaseRef(repoRoot));
+  const protectedBranches = (
+    rawConfig.protectedBranches ?? [defaultBranch]
+  ).map(normalizeBranchName);
+  const protectedBranch = protectedBranches[0] ?? normalizeBranchName(defaultBranch);
+  const worktreeRoot =
+    rawConfig.worktreeRoot === undefined
+      ? getDefaultWorktreeRoot(repoRoot, projectName)
+      : resolveConfiguredPath(rawConfig.worktreeRoot, repoRoot, homeDir);
+  const config = {
+    copyOnCreate: rawConfig.copyOnCreate ?? true,
+    defaultBaseRef: defaultBranch,
+    editorCommand: rawConfig.editorCommand,
+    fetchBeforeCreate: rawConfig.fetchBeforeCreate ?? false,
+    protectedBranches,
+    worktreeRoot,
+  };
 
   return {
+    config,
     repoRoot,
     projectName,
     protectedBranch,
+    protectedBranches,
     worktreeRoot,
     defaultBranch,
   };
@@ -35,18 +69,18 @@ export async function getRepoContext(cwd = process.cwd()): Promise<RepoContext> 
 export async function createWorktree(
   context: RepoContext,
   branchName: string,
+  { fetch = false }: CreateWorktreeOptions = {},
 ): Promise<CreateWorktreeResult> {
   const branch = branchName.trim();
 
   await validateBranchName(context.repoRoot, branch);
 
-  const targetPath = path.join(context.worktreeRoot, branchToSlug(branch));
-
-  if (await pathExists(targetPath)) {
-    throw new Error(`Worktree path already exists: ${targetPath}`);
+  if (fetch || context.config.fetchBeforeCreate) {
+    await git(context.repoRoot, ["fetch", "--prune", "origin"]);
   }
 
   await mkdir(context.worktreeRoot, { recursive: true });
+  const targetPath = await getAvailableWorktreePath(context, branch);
 
   if (await hasLocalBranch(context.repoRoot, branch)) {
     await git(context.repoRoot, ["worktree", "add", targetPath, branch]);
@@ -108,6 +142,10 @@ export async function listWorktrees(
         path: entry.path,
         branch: entry.branch,
         head: entry.head,
+        upstream: state.upstream,
+        ahead: state.ahead,
+        behind: state.behind,
+        lastCommit: state.lastCommit,
         isCurrent: path.resolve(entry.path) === path.resolve(context.repoRoot),
         isManaged: isManagedWorktreePath(context, entry.path),
         isDirty: state.isDirty,
@@ -169,6 +207,7 @@ export async function resolveWorktreeTarget(
 export async function removeWorktree(
   context: RepoContext,
   worktree: WorktreeEntry,
+  { forceDirty = false }: RemoveWorktreeOptions = {},
 ): Promise<void> {
   if (worktree.isCurrent) {
     throw new Error("Cannot remove the current worktree.");
@@ -184,11 +223,78 @@ export async function removeWorktree(
     return;
   }
 
-  const removeArgs = (await isWorktreeDirty(worktree.path))
+  const isDirty = await isWorktreeDirty(worktree.path);
+
+  if (isDirty && !forceDirty) {
+    throw new Error(
+      "Worktree has uncommitted changes. Use --force-dirty to remove it anyway.",
+    );
+  }
+
+  const removeArgs = isDirty
     ? ["worktree", "remove", "--force", worktree.path]
     : ["worktree", "remove", worktree.path];
 
   await git(context.repoRoot, removeArgs);
+}
+
+export async function cleanupWorktrees(
+  context: RepoContext,
+  {
+    dryRun = false,
+    includeMerged = true,
+    includeStale = true,
+  }: CleanupWorktreesOptions = {},
+): Promise<CleanupWorktreesResult> {
+  const worktrees = await listWorktrees(context);
+  const mergedBranches = includeMerged
+    ? await getMergedBranches(context.repoRoot, context.defaultBranch)
+    : new Set<string>();
+  const entries = worktrees.flatMap((worktree): CleanupEntry[] => {
+    if (worktree.isCurrent || isProtectedBranch(context, worktree)) {
+      return [];
+    }
+
+    if (includeStale && worktree.isPrunable) {
+      return [
+        {
+          action: "prune",
+          reason: "stale",
+          worktree,
+        },
+      ];
+    }
+
+    if (
+      includeMerged &&
+      worktree.isManaged &&
+      !worktree.isDirty &&
+      worktree.branch !== undefined &&
+      mergedBranches.has(worktree.branch)
+    ) {
+      return [
+        {
+          action: "remove",
+          reason: "merged",
+          worktree,
+        },
+      ];
+    }
+
+    return [];
+  });
+
+  if (!dryRun) {
+    for (const entry of entries) {
+      await removeWorktree(context, entry.worktree);
+    }
+  }
+
+  return {
+    dryRun,
+    entries,
+    removed: !dryRun && entries.length > 0,
+  };
 }
 
 export function isProtectedBranch(
@@ -197,7 +303,7 @@ export function isProtectedBranch(
 ): boolean {
   return (
     worktree.branch !== undefined &&
-    normalizeBranchName(worktree.branch) === context.protectedBranch
+    context.protectedBranches.includes(normalizeBranchName(worktree.branch))
   );
 }
 
@@ -209,6 +315,33 @@ export function branchToSlug(branch: string): string {
     .replace(/^-+|-+$/g, "");
 
   return slug.length > 0 ? slug : "worktree";
+}
+
+async function getAvailableWorktreePath(
+  context: RepoContext,
+  branch: string,
+): Promise<string> {
+  const slug = branchToSlug(branch);
+  const firstCandidate = path.join(context.worktreeRoot, slug);
+
+  if (!(await pathExists(firstCandidate))) {
+    return firstCandidate;
+  }
+
+  const hash = createHash("sha1").update(branch).digest("hex").slice(0, 8);
+  let suffix = 0;
+
+  while (true) {
+    const candidateSlug =
+      suffix === 0 ? `${slug}--${hash}` : `${slug}--${hash}-${suffix + 1}`;
+    const candidatePath = path.join(context.worktreeRoot, candidateSlug);
+
+    if (!(await pathExists(candidatePath))) {
+      return candidatePath;
+    }
+
+    suffix += 1;
+  }
 }
 
 function getSingleMatch(
@@ -235,6 +368,10 @@ async function getRepoRoot(cwd: string): Promise<string> {
   const { stdout } = await git(cwd, ["rev-parse", "--show-toplevel"]);
 
   return stdout.trim();
+}
+
+function getDefaultWorktreeRoot(repoRoot: string, projectName: string): string {
+  return path.join(path.dirname(repoRoot), ".worktrees", projectName);
 }
 
 async function getDefaultBaseRef(repoRoot: string): Promise<string> {
@@ -287,9 +424,13 @@ async function hasRemoteBranch(repoRoot: string, branch: string): Promise<boolea
 }
 
 async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
-  const { stdout } = await git(worktreePath, ["status", "--porcelain"]);
+  const { stdout } = await git(worktreePath, [
+    "status",
+    "--porcelain=v2",
+    "--branch",
+  ]);
 
-  return stdout.trim().length > 0;
+  return parseStatusPorcelainV2(stdout).isDirty;
 }
 
 async function getWorktreeState(
@@ -297,22 +438,125 @@ async function getWorktreeState(
 ): Promise<WorktreeState> {
   if (entry.isPrunable || !(await pathExists(entry.path))) {
     return {
+      ahead: undefined,
+      behind: undefined,
       isDirty: false,
       isPrunable: true,
+      lastCommit: undefined,
+      upstream: undefined,
     };
   }
 
   try {
+    const { stdout } = await git(entry.path, [
+      "status",
+      "--porcelain=v2",
+      "--branch",
+    ]);
+    const status = parseStatusPorcelainV2(stdout);
+
     return {
-      isDirty: await isWorktreeDirty(entry.path),
+      ahead: status.ahead,
+      behind: status.behind,
+      isDirty: status.isDirty,
       isPrunable: false,
+      lastCommit: await getLastCommit(entry.path),
+      upstream: status.upstream,
     };
   } catch {
     return {
+      ahead: undefined,
+      behind: undefined,
       isDirty: false,
       isPrunable: true,
+      lastCommit: undefined,
+      upstream: undefined,
     };
   }
+}
+
+function parseStatusPorcelainV2(output: string): Pick<
+  WorktreeState,
+  "ahead" | "behind" | "isDirty" | "upstream"
+> {
+  let ahead: number | undefined;
+  let behind: number | undefined;
+  let upstream: string | undefined;
+  let isDirty = false;
+
+  for (const line of output.split("\n")) {
+    if (line.length === 0) {
+      continue;
+    }
+
+    if (line.startsWith("# branch.upstream ")) {
+      upstream = line.slice("# branch.upstream ".length);
+      continue;
+    }
+
+    if (line.startsWith("# branch.ab ")) {
+      const match = /^# branch\.ab \+(\d+) -(\d+)$/.exec(line);
+
+      if (match !== null) {
+        ahead = Number.parseInt(match[1], 10);
+        behind = Number.parseInt(match[2], 10);
+      }
+      continue;
+    }
+
+    if (!line.startsWith("# ")) {
+      isDirty = true;
+    }
+  }
+
+  return { ahead, behind, isDirty, upstream };
+}
+
+async function getLastCommit(
+  worktreePath: string,
+): Promise<WorktreeLastCommit | undefined> {
+  const result = await gitMaybe(worktreePath, [
+    "log",
+    "-1",
+    "--format=%h%x00%ct%x00%s",
+  ]);
+
+  if (result === undefined) {
+    return undefined;
+  }
+
+  const [hash, epochSeconds, ...subjectParts] = result.trimEnd().split("\0");
+
+  if (hash === undefined || epochSeconds === undefined) {
+    return undefined;
+  }
+
+  const epoch = Number.parseInt(epochSeconds, 10);
+
+  return {
+    date: Number.isFinite(epoch) ? new Date(epoch * 1000).toISOString() : "",
+    hash,
+    subject: subjectParts.join("\0"),
+  };
+}
+
+async function getMergedBranches(
+  repoRoot: string,
+  baseRef: string,
+): Promise<Set<string>> {
+  const { stdout } = await git(repoRoot, [
+    "branch",
+    "--merged",
+    baseRef,
+    "--format=%(refname:short)",
+  ]);
+
+  return new Set(
+    stdout
+      .split("\n")
+      .map((branch) => branch.trim())
+      .filter((branch) => branch.length > 0),
+  );
 }
 
 function isManagedWorktreePath(context: RepoContext, worktreePath: string): boolean {
@@ -467,4 +711,8 @@ async function pathExists(targetPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function getHomeDir(): string | undefined {
+  return process.env.HOME ?? os.homedir();
 }

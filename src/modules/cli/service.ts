@@ -1,7 +1,9 @@
 import process from "node:process";
+import { spawn } from "node:child_process";
 import { copyPath } from "../clipboard/service.js";
 import type { CopyPathResult, RunCommand } from "../clipboard/types.js";
 import {
+  cleanupWorktrees,
   createWorktree,
   getRepoContext,
   listWorktrees,
@@ -9,17 +11,34 @@ import {
   resolveWorktreeTarget,
 } from "../worktree/service.js";
 import type {
+  CleanupEntry,
+  CleanupWorktreesResult,
   CreateWorktreeResult,
   RepoContext,
   WorktreeEntry,
 } from "../worktree/types.js";
 
-type CommandName = "copy" | "create" | "help" | "list" | "path" | "remove";
+type CommandName =
+  | "cleanup"
+  | "copy"
+  | "create"
+  | "help"
+  | "list"
+  | "open"
+  | "path"
+  | "remove"
+  | "shell-init";
 
 type CliFlags = {
-  readonly help: boolean;
-  readonly json: boolean;
-  readonly yes: boolean;
+  dryRun: boolean;
+  editor: string | undefined;
+  fetch: boolean;
+  forceDirty: boolean;
+  help: boolean;
+  json: boolean;
+  merged: boolean;
+  stale: boolean;
+  yes: boolean;
 };
 
 type ParsedCommandArgs = {
@@ -40,6 +59,7 @@ export type CliInput = NodeJS.ReadableStream & {
 export type RunCliCommandOptions = {
   readonly copyRunCommand?: RunCommand;
   readonly cwd?: string;
+  readonly editorRunCommand?: RunCommand;
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
   readonly stderr?: WritableLike;
@@ -50,6 +70,7 @@ export type RunCliCommandOptions = {
 type CliRuntimeOptions = {
   readonly copyRunCommand?: RunCommand;
   readonly cwd: string;
+  readonly editorRunCommand?: RunCommand;
   readonly env: NodeJS.ProcessEnv;
   readonly platform: NodeJS.Platform;
   readonly stderr: WritableLike;
@@ -73,6 +94,7 @@ export async function runCliCommand(
   {
     copyRunCommand,
     cwd = process.cwd(),
+    editorRunCommand,
     env = process.env,
     platform = process.platform,
     stderr = process.stderr,
@@ -84,6 +106,7 @@ export async function runCliCommand(
     await dispatchCommand(args, {
       copyRunCommand,
       cwd,
+      editorRunCommand,
       env,
       platform,
       stderr,
@@ -143,6 +166,9 @@ async function dispatchCommand(
   }
 
   switch (command) {
+    case "cleanup":
+      await handleCleanupCommand(parsed, options);
+      return;
     case "copy":
       await handleCopyCommand(parsed, options);
       return;
@@ -152,11 +178,17 @@ async function dispatchCommand(
     case "list":
       await handleListCommand(parsed, options);
       return;
+    case "open":
+      await handleOpenCommand(parsed, options);
+      return;
     case "path":
       await handlePathCommand(parsed, options);
       return;
     case "remove":
       await handleRemoveCommand(parsed, options);
+      return;
+    case "shell-init":
+      handleShellInitCommand(parsed, options.stdout);
       return;
     case "help":
       handleHelp(rest, options.stdout);
@@ -185,11 +217,11 @@ function handleHelp(args: readonly string[], stdout: WritableLike): void {
 
 async function handleListCommand(
   parsed: ParsedCommandArgs,
-  { cwd, stdout }: CliRuntimeOptions,
+  { cwd, env, stdout }: CliRuntimeOptions,
 ): Promise<void> {
   requirePositionals(parsed, 0, "shrubby list [--json]");
 
-  const context = await getRepoContext(cwd);
+  const context = await getRepoContextForCli(cwd, env);
   const worktrees = await listWorktrees(context);
 
   if (parsed.flags.json) {
@@ -202,12 +234,14 @@ async function handleListCommand(
 
 async function handleCreateCommand(
   parsed: ParsedCommandArgs,
-  { cwd, stdout }: CliRuntimeOptions,
+  { cwd, env, stdout }: CliRuntimeOptions,
 ): Promise<void> {
-  requirePositionals(parsed, 1, "shrubby create <branch> [--json]");
+  requirePositionals(parsed, 1, "shrubby create <branch> [--fetch] [--json]");
 
-  const context = await getRepoContext(cwd);
-  const result = await createWorktree(context, parsed.positionals[0]);
+  const context = await getRepoContextForCli(cwd, env);
+  const result = await createWorktree(context, parsed.positionals[0], {
+    fetch: parsed.flags.fetch,
+  });
 
   if (parsed.flags.json) {
     writeJson(stdout, result);
@@ -219,11 +253,11 @@ async function handleCreateCommand(
 
 async function handlePathCommand(
   parsed: ParsedCommandArgs,
-  { cwd, stdout }: CliRuntimeOptions,
+  { cwd, env, stdout }: CliRuntimeOptions,
 ): Promise<void> {
   requirePositionals(parsed, 1, "shrubby path <target> [--json]");
 
-  const { worktree } = await getResolvedWorktree(cwd, parsed.positionals[0]);
+  const { worktree } = await getResolvedWorktree(cwd, env, parsed.positionals[0]);
 
   if (parsed.flags.json) {
     writeJson(stdout, worktree);
@@ -245,7 +279,7 @@ async function handleCopyCommand(
 ): Promise<void> {
   requirePositionals(parsed, 1, "shrubby copy <target> [--json]");
 
-  const { worktree } = await getResolvedWorktree(cwd, parsed.positionals[0]);
+  const { worktree } = await getResolvedWorktree(cwd, env, parsed.positionals[0]);
   const result = await copyPath(worktree.path, {
     env,
     platform,
@@ -264,13 +298,28 @@ async function handleRemoveCommand(
   parsed: ParsedCommandArgs,
   {
     cwd,
+    env,
     stdin,
     stdout,
   }: CliRuntimeOptions,
 ): Promise<void> {
-  requirePositionals(parsed, 1, "shrubby remove <target> [--yes] [--json]");
+  requirePositionals(
+    parsed,
+    1,
+    "shrubby remove <target> [--yes] [--force-dirty] [--json]",
+  );
 
-  const { worktree } = await getResolvedWorktree(cwd, parsed.positionals[0]);
+  const { context, worktree } = await getResolvedWorktree(
+    cwd,
+    env,
+    parsed.positionals[0],
+  );
+
+  if (worktree.isDirty && !parsed.flags.forceDirty) {
+    throw new CliUsageError(
+      "Refusing to remove dirty worktree without --force-dirty.",
+    );
+  }
 
   if (!parsed.flags.yes) {
     if (stdin.isTTY !== true) {
@@ -296,8 +345,9 @@ async function handleRemoveCommand(
     }
   }
 
-  const context = await getRepoContext(cwd);
-  await removeWorktree(context, worktree);
+  await removeWorktree(context, worktree, {
+    forceDirty: parsed.flags.forceDirty,
+  });
 
   const action = worktree.isPrunable ? "pruned" : "removed";
 
@@ -313,14 +363,148 @@ async function handleRemoveCommand(
   writeLine(stdout, `${capitalize(action)} ${formatLabel(worktree)}.`);
 }
 
+async function handleOpenCommand(
+  parsed: ParsedCommandArgs,
+  {
+    cwd,
+    editorRunCommand = runCommandDefault,
+    env,
+    stdout,
+  }: CliRuntimeOptions,
+): Promise<void> {
+  requirePositionals(
+    parsed,
+    1,
+    "shrubby open <target> [--editor <command>] [--json]",
+  );
+
+  const { context, worktree } = await getResolvedWorktree(
+    cwd,
+    env,
+    parsed.positionals[0],
+  );
+  const editorCommand =
+    parsed.flags.editor ??
+    context.config.editorCommand ??
+    env.SHRUBBY_EDITOR ??
+    env.VISUAL ??
+    env.EDITOR ??
+    "code";
+  const [command, ...commandArgs] = parseCommandLine(editorCommand);
+
+  if (command === undefined) {
+    throw new CliUsageError("Editor command cannot be empty.");
+  }
+
+  const args = [...commandArgs, worktree.path];
+
+  await editorRunCommand(command, args);
+
+  if (parsed.flags.json) {
+    writeJson(stdout, {
+      command,
+      args,
+      path: worktree.path,
+      target: worktree,
+    });
+    return;
+  }
+
+  writeLine(stdout, `Opened ${formatLabel(worktree)} in ${command}.`);
+}
+
+async function handleCleanupCommand(
+  parsed: ParsedCommandArgs,
+  { cwd, env, stdin, stdout }: CliRuntimeOptions,
+): Promise<void> {
+  requirePositionals(
+    parsed,
+    0,
+    "shrubby cleanup [--dry-run] [--merged] [--stale] [--yes] [--json]",
+  );
+
+  const context = await getRepoContextForCli(cwd, env);
+  const includeMerged = parsed.flags.merged || !parsed.flags.stale;
+  const includeStale = parsed.flags.stale || !parsed.flags.merged;
+  const preview = await cleanupWorktrees(context, {
+    dryRun: true,
+    includeMerged,
+    includeStale,
+  });
+
+  if (parsed.flags.dryRun) {
+    writeCleanupResult(stdout, parsed.flags.json, preview);
+    return;
+  }
+
+  if (preview.entries.length === 0) {
+    writeCleanupResult(stdout, parsed.flags.json, {
+      ...preview,
+      dryRun: false,
+      removed: false,
+    });
+    return;
+  }
+
+  if (!parsed.flags.yes) {
+    if (stdin.isTTY !== true) {
+      throw new CliUsageError(
+        "Refusing to clean up without --yes when stdin is not interactive.",
+      );
+    }
+
+    const confirmed = await confirm(
+      stdin,
+      stdout,
+      `Remove ${preview.entries.length} cleanup candidate(s)? y/N `,
+    );
+
+    if (!confirmed) {
+      const cancelledResult = {
+        ...preview,
+        dryRun: false,
+        removed: false,
+      };
+
+      if (parsed.flags.json) {
+        writeJson(stdout, {
+          ...formatCleanupJson(cancelledResult),
+          cancelled: true,
+        });
+        return;
+      }
+
+      writeLine(stdout, "Cancelled.");
+      return;
+    }
+  }
+
+  const result = await cleanupWorktrees(context, {
+    dryRun: false,
+    includeMerged,
+    includeStale,
+  });
+
+  writeCleanupResult(stdout, parsed.flags.json, result);
+}
+
+function handleShellInitCommand(
+  parsed: ParsedCommandArgs,
+  stdout: WritableLike,
+): void {
+  requirePositionals(parsed, 1, "shrubby shell-init <zsh|bash|fish>");
+  write(stdout, formatShellInit(parsed.positionals[0]));
+}
+
 async function getResolvedWorktree(
   cwd: string,
+  env: NodeJS.ProcessEnv,
   target: string,
 ): Promise<{
   readonly context: RepoContext;
   readonly worktree: WorktreeEntry;
 }> {
-  const context = await getRepoContext(cwd);
+  const context = await getRepoContextForCli(cwd, env);
   const worktrees = await listWorktrees(context);
   const worktree = await resolveWorktreeTarget(context, target, {
     cwd,
@@ -330,20 +514,35 @@ async function getResolvedWorktree(
   return { context, worktree };
 }
 
+function getRepoContextForCli(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<RepoContext> {
+  return getRepoContext(cwd, { homeDir: env.HOME });
+}
+
 function parseCommandArgs(
   command: CommandName,
   args: readonly string[],
 ): ParsedCommandArgs {
   const allowedFlags = getAllowedFlags(command);
-  const flags = {
+  const flags: CliFlags = {
+    dryRun: false,
+    editor: undefined,
+    fetch: false,
+    forceDirty: false,
     help: false,
     json: false,
+    merged: false,
+    stale: false,
     yes: false,
   };
   const positionals: string[] = [];
   let allowOnlyPositionals = false;
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
     if (allowOnlyPositionals) {
       positionals.push(arg);
       continue;
@@ -360,9 +559,58 @@ function parseCommandArgs(
       continue;
     }
 
+    if (arg === "--dry-run") {
+      assertFlagAllowed(command, allowedFlags, "dryRun", arg);
+      flags.dryRun = true;
+      continue;
+    }
+
+    if (arg === "--editor" || arg.startsWith("--editor=")) {
+      assertFlagAllowed(command, allowedFlags, "editor", "--editor");
+      const editor =
+        arg === "--editor"
+          ? args[index + 1]
+          : arg.slice("--editor=".length);
+
+      if (editor === undefined || editor.trim().length === 0) {
+        throw new CliUsageError("Option '--editor' requires a value.");
+      }
+
+      if (arg === "--editor") {
+        index += 1;
+      }
+
+      flags.editor = editor;
+      continue;
+    }
+
+    if (arg === "--fetch") {
+      assertFlagAllowed(command, allowedFlags, "fetch", arg);
+      flags.fetch = true;
+      continue;
+    }
+
+    if (arg === "--force-dirty") {
+      assertFlagAllowed(command, allowedFlags, "forceDirty", arg);
+      flags.forceDirty = true;
+      continue;
+    }
+
     if (arg === "--json") {
       assertFlagAllowed(command, allowedFlags, "json", arg);
       flags.json = true;
+      continue;
+    }
+
+    if (arg === "--merged") {
+      assertFlagAllowed(command, allowedFlags, "merged", arg);
+      flags.merged = true;
+      continue;
+    }
+
+    if (arg === "--stale") {
+      assertFlagAllowed(command, allowedFlags, "stale", arg);
+      flags.stale = true;
       continue;
     }
 
@@ -384,13 +632,19 @@ function parseCommandArgs(
 
 function getAllowedFlags(command: CommandName): readonly (keyof CliFlags)[] {
   switch (command) {
+    case "cleanup":
+      return ["dryRun", "help", "json", "merged", "stale", "yes"];
     case "copy":
-    case "create":
     case "list":
     case "path":
       return ["help", "json"];
+    case "create":
+      return ["fetch", "help", "json"];
+    case "open":
+      return ["editor", "help", "json"];
     case "remove":
-      return ["help", "json", "yes"];
+      return ["forceDirty", "help", "json", "yes"];
+    case "shell-init":
     case "help":
       return ["help"];
   }
@@ -420,7 +674,17 @@ function requirePositionals(
 }
 
 function isCommandName(command: string): command is CommandName {
-  return ["copy", "create", "help", "list", "path", "remove"].includes(command);
+  return [
+    "cleanup",
+    "copy",
+    "create",
+    "help",
+    "list",
+    "open",
+    "path",
+    "remove",
+    "shell-init",
+  ].includes(command);
 }
 
 function getGeneralHelp(): string {
@@ -430,18 +694,24 @@ Usage:
   shrubby
   shrubby --help
   shrubby help [command]
+  shrubby cleanup [--dry-run] [--merged] [--stale] [--yes] [--json]
   shrubby list [--json]
-  shrubby create <branch> [--json]
+  shrubby create <branch> [--fetch] [--json]
   shrubby path <target> [--json]
   shrubby copy <target> [--json]
-  shrubby remove <target> [--yes] [--json]
+  shrubby open <target> [--editor <command>] [--json]
+  shrubby remove <target> [--yes] [--force-dirty] [--json]
+  shrubby shell-init <zsh|bash|fish>
 
 Commands:
+  cleanup          Remove safe cleanup candidates.
   list              List git worktrees for the current repository.
   create <branch>   Create or reuse a branch in the managed worktree root.
   path <target>      Print the selected worktree path.
   copy <target>      Copy the selected worktree path.
+  open <target>      Open the selected worktree in an editor.
   remove <target>    Remove a non-current, non-protected worktree.
+  shell-init         Print shell helpers for fast cd/open workflows.
   help [command]     Show help.
 
 Targets resolve by exact branch, exact path, then unique path basename.
@@ -450,6 +720,14 @@ Targets resolve by exact branch, exact path, then unique path basename.
 
 function getCommandHelp(command: Exclude<CommandName, "help">): string {
   switch (command) {
+    case "cleanup":
+      return `Usage: shrubby cleanup [--dry-run] [--merged] [--stale] [--yes] [--json]
+
+Remove safe cleanup candidates. Stale metadata is pruned; clean, managed,
+merged worktrees are removed. Without --merged or --stale, both are included.
+Use --dry-run to preview. Without --yes, shrubby prompts in a terminal and
+refuses non-interactive cleanup.
+`;
     case "copy":
       return `Usage: shrubby copy <target> [--json]
 
@@ -457,10 +735,11 @@ Copy the selected worktree path. Targets resolve by exact branch, exact path,
 then unique path basename.
 `;
     case "create":
-      return `Usage: shrubby create <branch> [--json]
+      return `Usage: shrubby create <branch> [--fetch] [--json]
 
 Create a worktree under the managed root. Existing local and remote branches are
-reused; otherwise a new branch is created from the detected default branch.
+reused; otherwise a new branch is created from the detected default branch. Use
+--fetch to run 'git fetch --prune origin' before resolving remote branches.
 `;
     case "list":
       return `Usage: shrubby list [--json]
@@ -468,17 +747,29 @@ reused; otherwise a new branch is created from the detected default branch.
 List worktrees for the current repository. Human output is a compact table;
 --json emits the repository context and worktree entries.
 `;
+    case "open":
+      return `Usage: shrubby open <target> [--editor <command>] [--json]
+
+Open the selected worktree in an editor. The editor comes from --editor,
+shrubby config, SHRUBBY_EDITOR, VISUAL, EDITOR, then 'code'.
+`;
     case "path":
       return `Usage: shrubby path <target> [--json]
 
 Print the selected worktree path. Human output is path-only for shell use.
 `;
     case "remove":
-      return `Usage: shrubby remove <target> [--yes] [--json]
+      return `Usage: shrubby remove <target> [--yes] [--force-dirty] [--json]
 
 Remove a worktree using the same current and protected-branch safeguards as the
-terminal UI. Dirty worktrees are removed with force. Without --yes, shrubby
+terminal UI. Dirty worktrees require --force-dirty. Without --yes, shrubby
 prompts in a terminal and refuses non-interactive removal.
+`;
+    case "shell-init":
+      return `Usage: shrubby shell-init <zsh|bash|fish>
+
+Print shell functions for fast personal workflows. Source the output from your
+shell profile to add 'swd <target>' and 'sopen <target>'.
 `;
   }
 }
@@ -489,19 +780,31 @@ function formatWorktreeTable(worktrees: readonly WorktreeEntry[]): string {
   }
 
   const rows = worktrees.map((worktree) => ({
+    aheadBehind: formatAheadBehind(worktree),
     branch: worktree.branch ?? "(detached)",
+    last: formatLastCommit(worktree),
     path: worktree.path,
     scope: getScope(worktree),
     state: getState(worktree),
+    upstream: worktree.upstream ?? "-",
   }));
+  const aheadBehindWidth = Math.max(
+    "A/B".length,
+    ...rows.map((row) => row.aheadBehind.length),
+  );
   const branchWidth = Math.max("BRANCH".length, ...rows.map((row) => row.branch.length));
+  const lastWidth = Math.max("LAST".length, ...rows.map((row) => row.last.length));
   const scopeWidth = Math.max("SCOPE".length, ...rows.map((row) => row.scope.length));
   const stateWidth = Math.max("STATE".length, ...rows.map((row) => row.state.length));
+  const upstreamWidth = Math.max(
+    "UPSTREAM".length,
+    ...rows.map((row) => row.upstream.length),
+  );
   const lines = [
-    `${"BRANCH".padEnd(branchWidth)}  ${"SCOPE".padEnd(scopeWidth)}  ${"STATE".padEnd(stateWidth)}  PATH`,
+    `${"BRANCH".padEnd(branchWidth)}  ${"SCOPE".padEnd(scopeWidth)}  ${"STATE".padEnd(stateWidth)}  ${"UPSTREAM".padEnd(upstreamWidth)}  ${"A/B".padEnd(aheadBehindWidth)}  ${"LAST".padEnd(lastWidth)}  PATH`,
     ...rows.map(
       (row) =>
-        `${row.branch.padEnd(branchWidth)}  ${row.scope.padEnd(scopeWidth)}  ${row.state.padEnd(stateWidth)}  ${row.path}`,
+        `${row.branch.padEnd(branchWidth)}  ${row.scope.padEnd(scopeWidth)}  ${row.state.padEnd(stateWidth)}  ${row.upstream.padEnd(upstreamWidth)}  ${row.aheadBehind.padEnd(aheadBehindWidth)}  ${row.last.padEnd(lastWidth)}  ${row.path}`,
     ),
   ];
 
@@ -547,6 +850,65 @@ function formatCopyResult(result: CopyPathResult): string {
   return `Copied ${result.path} via ${result.copiedTo.join(", ")}.${warning}`;
 }
 
+function writeCleanupResult(
+  stdout: WritableLike,
+  asJson: boolean,
+  result: CleanupWorktreesResult,
+): void {
+  if (asJson) {
+    writeJson(stdout, formatCleanupJson(result));
+    return;
+  }
+
+  write(stdout, formatCleanupResult(result));
+}
+
+function formatCleanupJson(result: CleanupWorktreesResult): {
+  readonly dryRun: boolean;
+  readonly entries: readonly CleanupEntry[];
+  readonly count: number;
+  readonly removed: boolean;
+} {
+  return {
+    dryRun: result.dryRun,
+    entries: result.entries,
+    count: result.entries.length,
+    removed: result.removed,
+  };
+}
+
+function formatCleanupResult(result: CleanupWorktreesResult): string {
+  if (result.entries.length === 0) {
+    return "No cleanup candidates.\n";
+  }
+
+  const heading = result.dryRun ? "Cleanup candidates:" : "Cleaned up:";
+  const lines = result.entries.map((entry) => {
+    const label = formatLabel(entry.worktree);
+    const action = entry.action === "prune" ? "prune" : "remove";
+
+    return `  ${action} ${label} (${entry.reason}) ${entry.worktree.path}`;
+  });
+
+  return `${[heading, ...lines, ""].join("\n")}`;
+}
+
+function formatAheadBehind(worktree: WorktreeEntry): string {
+  if (worktree.ahead === undefined && worktree.behind === undefined) {
+    return "-";
+  }
+
+  return `+${worktree.ahead ?? 0}/-${worktree.behind ?? 0}`;
+}
+
+function formatLastCommit(worktree: WorktreeEntry): string {
+  if (worktree.lastCommit === undefined) {
+    return "-";
+  }
+
+  return `${worktree.lastCommit.hash} ${worktree.lastCommit.date.slice(0, 10)}`;
+}
+
 function getScope(worktree: WorktreeEntry): string {
   if (worktree.isCurrent) {
     return "current";
@@ -569,6 +931,125 @@ function formatLabel(worktree: WorktreeEntry): string {
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function parseCommandLine(commandLine: string): readonly string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | undefined;
+  let isEscaped = false;
+
+  for (const char of commandLine.trim()) {
+    if (isEscaped) {
+      current += char;
+      isEscaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      isEscaped = true;
+      continue;
+    }
+
+    if (quote !== undefined) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === "\"") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (isEscaped) {
+    current += "\\";
+  }
+
+  if (quote !== undefined) {
+    throw new CliUsageError("Editor command has an unterminated quote.");
+  }
+
+  if (current.length > 0) {
+    parts.push(current);
+  }
+
+  return parts;
+}
+
+function runCommandDefault(
+  command: string,
+  args: readonly string[],
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {
+      stdio: "inherit",
+    });
+
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`${command} exited with ${code}`));
+    });
+  });
+}
+
+function formatShellInit(shell: string): string {
+  if (shell === "zsh" || shell === "bash") {
+    return `swd() {
+  if [ "$#" -ne 1 ]; then
+    printf 'usage: swd <target>\\n' >&2
+    return 2
+  fi
+
+  local target_path
+  target_path="$(shrubby path "$1")" || return
+  cd "$target_path"
+}
+
+sopen() {
+  shrubby open "$@"
+}
+`;
+  }
+
+  if (shell === "fish") {
+    return `function swd
+  if test (count $argv) -ne 1
+    echo 'usage: swd <target>' >&2
+    return 2
+  end
+
+  set -l target_path (shrubby path $argv[1])
+  or return
+  cd "$target_path"
+end
+
+function sopen
+  shrubby open $argv
+end
+`;
+  }
+
+  throw new CliUsageError(`Unsupported shell '${shell}'.`);
 }
 
 async function confirm(
