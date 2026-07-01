@@ -31,9 +31,9 @@ Install the CLI command locally:
 Run it from inside the git repository you want to manage.
 
 Inside the list screen, press `c` to copy a selected worktree path. Press `d` to
-delete a selected clean, non-current worktree after confirmation; stale entries
-are pruned. The current checkout and protected default branch, usually `main`,
-cannot be deleted.
+delete a selected non-current worktree after confirmation; dirty worktrees are
+force-removed and stale entries are pruned. The current checkout and protected
+default branch, usually `main`, cannot be deleted.
 
 Command usage:
 

@@ -22,6 +22,7 @@ const MAX_VISIBLE_WORKTREES = 4;
 
 export function CreateWorktreeScreen({
   context,
+  copyFeedback,
   errorMessage,
   isCreating,
   onSubmit,
@@ -70,6 +71,7 @@ export function CreateWorktreeScreen({
             Branch: {result.branch} | Base: {result.baseRef} | Mode:{" "}
             {result.mode}
           </Text>
+          <CopyFeedbackView feedback={copyFeedback} />
         </Box>
       )}
 
@@ -210,7 +212,7 @@ export function WorktreeListScreen({
 }
 
 function canDeleteWorktree(context: RepoContext, worktree: WorktreeEntry): boolean {
-  return !worktree.isCurrent && !isProtectedBranch(context, worktree) && !worktree.isDirty;
+  return !worktree.isCurrent && !isProtectedBranch(context, worktree);
 }
 
 function DeleteWarningLines({
@@ -231,7 +233,7 @@ function DeleteWarningLines({
       ) : undefined}
       {worktree.isDirty ? (
         <Text color="yellow" wrap="truncate">
-          This worktree is dirty; deletion will be blocked until it is clean.
+          This worktree is dirty; deletion will discard uncommitted changes.
         </Text>
       ) : undefined}
       {worktree.isPrunable ? (

@@ -184,11 +184,11 @@ export async function removeWorktree(
     return;
   }
 
-  if (await isWorktreeDirty(worktree.path)) {
-    throw new Error("Worktree has uncommitted changes. Commit or clean it first.");
-  }
+  const removeArgs = (await isWorktreeDirty(worktree.path))
+    ? ["worktree", "remove", "--force", worktree.path]
+    : ["worktree", "remove", worktree.path];
 
-  await git(context.repoRoot, ["worktree", "remove", worktree.path]);
+  await git(context.repoRoot, removeArgs);
 }
 
 export function isProtectedBranch(

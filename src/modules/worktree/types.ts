@@ -58,6 +58,7 @@ export type CommandNotFoundFailure = {
 };
 
 export type CreateWorktreeScreenProps = {
+  readonly copyFeedback?: CopyFeedback;
   readonly context: RepoContext;
   readonly errorMessage?: string;
   readonly isCreating: boolean;

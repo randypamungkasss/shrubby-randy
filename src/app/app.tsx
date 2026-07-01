@@ -75,6 +75,7 @@ export function App() {
   }, []);
 
   useExitKeys({
+    isQuitKeyEnabled: screen !== "create",
     onEscape:
       screen === "menu"
         ? undefined
@@ -108,6 +109,7 @@ export function App() {
         />
       ) : screen === "create" ? (
         <CreateWorktreeScreen
+          copyFeedback={copyState}
           context={repoState.context}
           errorMessage={createState.errorMessage}
           isCreating={createState.isCreating}
@@ -221,10 +223,12 @@ export function App() {
     }
 
     setCreateState({ isCreating: true });
+    setCopyState({ isCopying: false });
 
     try {
       const result = await createWorktree(context, branch);
       const worktrees = await listWorktrees(context);
+      const createdMessage = `Created ${result.branch}.`;
 
       setRepoState((state) =>
         state.status === "ready"
@@ -238,11 +242,36 @@ export function App() {
         isCreating: false,
         result,
       });
-      setStatusMessage(`Created ${result.branch}.`);
+      setStatusMessage(createdMessage);
+      await copyCreatedWorktreePath(result, createdMessage);
     } catch (error) {
       setCreateState({
         errorMessage: getErrorMessage(error),
         isCreating: false,
+      });
+    }
+  }
+
+  async function copyCreatedWorktreePath(
+    result: CreateWorktreeResult,
+    createdMessage: string,
+  ): Promise<void> {
+    setCopyState({ isCopying: true });
+
+    try {
+      const copyResult = await copyPath(result.path);
+      const copyMessage = formatCopySuccess(copyResult);
+
+      setCopyState({
+        isCopying: false,
+        message: copyMessage,
+        warningMessage: formatCopyWarning(copyResult),
+      });
+      setStatusMessage(`${createdMessage} ${copyMessage}`);
+    } catch (error) {
+      setCopyState({
+        errorMessage: getCopyErrorMessage(error),
+        isCopying: false,
       });
     }
   }
@@ -315,7 +344,7 @@ function getFooter(repoStatus: RepoState["status"], screen: Screen): string {
   }
 
   if (screen === "create") {
-    return "Type branch | Enter create | Esc back | q exit | shrubby";
+    return "Type branch | Enter create | Esc back | Ctrl-C exit | shrubby";
   }
 
   if (screen === "list") {

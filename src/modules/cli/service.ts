@@ -441,7 +441,7 @@ Commands:
   create <branch>   Create or reuse a branch in the managed worktree root.
   path <target>      Print the selected worktree path.
   copy <target>      Copy the selected worktree path.
-  remove <target>    Remove a clean, non-current, non-protected worktree.
+  remove <target>    Remove a non-current, non-protected worktree.
   help [command]     Show help.
 
 Targets resolve by exact branch, exact path, then unique path basename.
@@ -476,9 +476,9 @@ Print the selected worktree path. Human output is path-only for shell use.
     case "remove":
       return `Usage: shrubby remove <target> [--yes] [--json]
 
-Remove a worktree using the same dirty, current, and protected-branch safeguards
-as the terminal UI. Without --yes, shrubby prompts in a terminal and refuses
-non-interactive removal.
+Remove a worktree using the same current and protected-branch safeguards as the
+terminal UI. Dirty worktrees are removed with force. Without --yes, shrubby
+prompts in a terminal and refuses non-interactive removal.
 `;
   }
 }

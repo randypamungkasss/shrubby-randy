@@ -58,17 +58,25 @@ test("creates a new branch worktree under the managed root", async () => {
   });
 });
 
-test("blocks removal of dirty managed worktrees", async () => {
+test("removes dirty managed worktrees without deleting branches", async () => {
   await withRepo(async ({ repoRoot }) => {
     const context = await getRepoContext(repoRoot);
     const result = await createWorktree(context, "dirty-test");
     await writeFile(path.join(result.path, "dirty.txt"), "dirty\n");
     const worktree = await findWorktree(context, result.path);
 
-    await assert.rejects(
-      removeWorktree(context, worktree),
-      /uncommitted changes/i,
+    assert.equal(worktree.isDirty, true);
+
+    await removeWorktree(context, worktree);
+
+    const worktrees = await listWorktrees(context);
+    assert.equal(
+      worktrees.some((worktree) => worktree.path === result.path),
+      false,
     );
+
+    const branches = await git(repoRoot, ["branch", "--list", "dirty-test"]);
+    assert.match(branches.stdout, /dirty-test/);
   });
 });
 

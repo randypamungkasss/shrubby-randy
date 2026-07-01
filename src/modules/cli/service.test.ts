@@ -128,6 +128,22 @@ test("removes a worktree with --yes", async () => {
   });
 });
 
+test("removes a dirty worktree with --yes", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const created = await createWithCli(repoRoot, "cli-remove-dirty-yes");
+    await writeFile(path.join(created.path, "dirty.txt"), "dirty\n");
+
+    const removeResult = await runCli(["remove", "cli-remove-dirty-yes", "--yes"], {
+      cwd: repoRoot,
+    });
+    const worktreeList = await git(repoRoot, ["worktree", "list", "--porcelain"]);
+
+    assert.equal(removeResult.code, 0);
+    assert.match(removeResult.stdout, /Removed cli-remove-dirty-yes\./);
+    assert.equal(worktreeList.stdout.includes(created.path), false);
+  });
+});
+
 test("prompts before removing in an interactive terminal", async () => {
   await withRepo(async ({ repoRoot }) => {
     const created = await createWithCli(repoRoot, "cli-remove-prompt-yes");
