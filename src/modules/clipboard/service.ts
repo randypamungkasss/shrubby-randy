@@ -30,18 +30,35 @@ export async function copyPath(
 ): Promise<CopyPathResult> {
   const copiedTo: CopyMethod[] = [];
   const failures: CopyFailure[] = [];
-  const candidates = getCopyCommandCandidates(targetPath, env, platform);
+  const candidateGroups = getCopyCommandCandidateGroups(
+    targetPath,
+    env,
+    platform,
+  );
 
-  for (const candidate of candidates) {
-    await tryCopy({
-      args: candidate.args,
-      command: candidate.command,
-      copiedTo,
-      failures,
-      input: candidate.input,
-      method: candidate.method,
-      runCommand,
-    });
+  for (const candidates of candidateGroups) {
+    const candidateFailures: CopyFailure[] = [];
+    let copied = false;
+
+    for (const candidate of candidates) {
+      copied = await tryCopy({
+        args: candidate.args,
+        command: candidate.command,
+        copiedTo,
+        failures: candidateFailures,
+        input: candidate.input,
+        method: candidate.method,
+        runCommand,
+      });
+
+      if (copied) {
+        break;
+      }
+    }
+
+    if (!copied) {
+      failures.push(...candidateFailures);
+    }
   }
 
   const result: CopyPathResult = {
@@ -57,25 +74,29 @@ export async function copyPath(
   return result;
 }
 
-function getCopyCommandCandidates(
+function getCopyCommandCandidateGroups(
   targetPath: string,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
-): readonly CopyCommandCandidate[] {
-  const candidates: CopyCommandCandidate[] = [];
+): readonly (readonly CopyCommandCandidate[])[] {
+  const candidateGroups: CopyCommandCandidate[][] = [];
 
   if (platform === "darwin") {
-    candidates.push({
-      args: [],
-      command: "pbcopy",
-      input: targetPath,
-      method: "pbcopy",
-    });
+    candidateGroups.push([
+      {
+        args: [],
+        command: "pbcopy",
+        input: targetPath,
+        method: "pbcopy",
+      },
+    ]);
   }
 
   if (platform === "linux") {
+    const linuxClipboardCandidates: CopyCommandCandidate[] = [];
+
     if (env.WAYLAND_DISPLAY !== undefined && env.WAYLAND_DISPLAY.length > 0) {
-      candidates.push({
+      linuxClipboardCandidates.push({
         args: [],
         command: "wl-copy",
         input: targetPath,
@@ -84,7 +105,7 @@ function getCopyCommandCandidates(
     }
 
     if (env.DISPLAY !== undefined && env.DISPLAY.length > 0) {
-      candidates.push(
+      linuxClipboardCandidates.push(
         {
           args: ["-selection", "clipboard"],
           command: "xclip",
@@ -99,34 +120,44 @@ function getCopyCommandCandidates(
         },
       );
     }
+
+    if (linuxClipboardCandidates.length > 0) {
+      candidateGroups.push(linuxClipboardCandidates);
+    }
   }
 
   if (platform === "win32" || isWsl(env)) {
-    candidates.push(
-      {
-        args: [],
-        command: "clip.exe",
-        input: targetPath,
-        method: "clip.exe",
-      },
-      {
-        args: ["-NoProfile", "-Command", "$input | Set-Clipboard"],
-        command: "powershell.exe",
-        input: targetPath,
-        method: "powershell.exe",
-      },
+    candidateGroups.push(
+      [
+        {
+          args: [],
+          command: "clip.exe",
+          input: targetPath,
+          method: "clip.exe",
+        },
+      ],
+      [
+        {
+          args: ["-NoProfile", "-Command", "$input | Set-Clipboard"],
+          command: "powershell.exe",
+          input: targetPath,
+          method: "powershell.exe",
+        },
+      ],
     );
   }
 
   if (env.TMUX !== undefined && env.TMUX.length > 0) {
-    candidates.push({
-      args: ["set-buffer", "-w", targetPath],
-      command: "tmux",
-      method: "tmux",
-    });
+    candidateGroups.push([
+      {
+        args: ["set-buffer", "-w", targetPath],
+        command: "tmux",
+        method: "tmux",
+      },
+    ]);
   }
 
-  return candidates;
+  return candidateGroups;
 }
 
 function isWsl(env: NodeJS.ProcessEnv): boolean {
@@ -144,15 +175,17 @@ async function tryCopy({
   input,
   method,
   runCommand,
-}: TryCopyOptions): Promise<void> {
+}: TryCopyOptions): Promise<boolean> {
   try {
     await runCommand(command, args, { input });
     copiedTo.push(method);
+    return true;
   } catch (error) {
     failures.push({
       method,
       message: getErrorMessage(error),
     });
+    return false;
   }
 }
 

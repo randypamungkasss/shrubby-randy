@@ -65,7 +65,7 @@ test("succeeds when tmux copy works and pbcopy fails", async () => {
   assert.equal(result.failures[0]?.method, "pbcopy");
 });
 
-test("copies to Linux Wayland and X11 clipboard tools", async () => {
+test("uses wl-copy without trying X11 fallbacks", async () => {
   const calls: CommandCall[] = [];
   const result = await copyPath("/tmp/repo", {
     env: { DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" },
@@ -73,7 +73,32 @@ test("copies to Linux Wayland and X11 clipboard tools", async () => {
     runCommand: createRunner({ calls }),
   });
 
-  assert.deepEqual(result.copiedTo, ["wl-copy", "xclip", "xsel"]);
+  assert.deepEqual(result.copiedTo, ["wl-copy"]);
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(calls, [
+    {
+      args: [],
+      command: "wl-copy",
+      input: "/tmp/repo",
+    },
+  ]);
+});
+
+test("falls back from wl-copy to xclip without warning", async () => {
+  const calls: CommandCall[] = [];
+  const result = await copyPath("/tmp/repo", {
+    env: { DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" },
+    platform: "linux",
+    runCommand: createRunner({
+      calls,
+      failures: {
+        "wl-copy": new Error("wl-copy unavailable"),
+      },
+    }),
+  });
+
+  assert.deepEqual(result.copiedTo, ["xclip"]);
+  assert.deepEqual(result.failures, []);
   assert.deepEqual(calls, [
     {
       args: [],
@@ -85,12 +110,59 @@ test("copies to Linux Wayland and X11 clipboard tools", async () => {
       command: "xclip",
       input: "/tmp/repo",
     },
+  ]);
+});
+
+test("falls back from xclip to xsel without warning", async () => {
+  const calls: CommandCall[] = [];
+  const result = await copyPath("/tmp/repo", {
+    env: { DISPLAY: ":0" },
+    platform: "linux",
+    runCommand: createRunner({
+      calls,
+      failures: {
+        xclip: new Error("xclip unavailable"),
+      },
+    }),
+  });
+
+  assert.deepEqual(result.copiedTo, ["xsel"]);
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(calls, [
+    {
+      args: ["-selection", "clipboard"],
+      command: "xclip",
+      input: "/tmp/repo",
+    },
     {
       args: ["--clipboard", "--input"],
       command: "xsel",
       input: "/tmp/repo",
     },
   ]);
+});
+
+test("reports every Linux clipboard failure when no fallback works", async () => {
+  await assert.rejects(
+    copyPath("/tmp/repo", {
+      env: { DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" },
+      platform: "linux",
+      runCommand: createRunner({
+        failures: {
+          "wl-copy": new Error("wl-copy unavailable"),
+          xclip: new Error("xclip unavailable"),
+          xsel: new Error("xsel unavailable"),
+        },
+      }),
+    }),
+    (error) => {
+      assert.equal(error instanceof CopyPathError, true);
+      assert.match((error as Error).message, /wl-copy unavailable/);
+      assert.match((error as Error).message, /xclip unavailable/);
+      assert.match((error as Error).message, /xsel unavailable/);
+      return true;
+    },
+  );
 });
 
 test("copies to Windows clipboard tools on Windows", async () => {
