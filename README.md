@@ -72,7 +72,13 @@ shrubby --create "$(git rev-parse --abbrev-ref HEAD)-review"
 
 Add `--prefill` to open the create screen with the branch filled in but not
 created, so it can be edited before pressing Enter. `Ctrl-U` clears the field.
-Without `--create`, the same screen is reachable from the menu and starts empty.
+
+Choosing **Create worktree** from the menu pre-fills the field with today's
+date id under the current branch's prefix, so on `feat/20260929` the screen
+opens on `feat/20261007-1` and a single Enter creates it. The trailing number
+increments past branches already dated today, so the next one is
+`feat/20261007-2`. The suggestion is absent on a detached HEAD and is always
+editable.
 
 Copy uses available clipboard targets for the current environment: `pbcopy` on
 macOS, `wl-copy`/`xclip`/`xsel` on Linux desktops, `clip.exe`/`powershell.exe`

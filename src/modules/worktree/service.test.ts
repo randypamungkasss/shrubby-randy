@@ -444,6 +444,44 @@ test("converts branch names to stable path slugs", () => {
   assert.equal(branchToSlug("release/2026.06"), "release--2026.06");
 });
 
+test("suggests a dated branch id under the current branch prefix", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    await git(repoRoot, ["checkout", "-b", "feat/20260929"]);
+    const context = await getRepoContext(repoRoot, { now: new Date(2026, 9, 7) });
+
+    assert.equal(context.suggestedBranch, "feat/20261007-1");
+  });
+});
+
+test("increments the suggested id past branches dated today", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    await git(repoRoot, ["checkout", "-b", "feat/20260929"]);
+    await git(repoRoot, ["branch", "feat/20261007-1"]);
+    await git(repoRoot, ["branch", "feat/20261007-2"]);
+    await git(repoRoot, ["branch", "feat/20261007-old"]);
+    const context = await getRepoContext(repoRoot, { now: new Date(2026, 9, 7) });
+
+    assert.equal(context.suggestedBranch, "feat/20261007-3");
+  });
+});
+
+test("suggests a bare dated id when the current branch has no prefix", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    const context = await getRepoContext(repoRoot, { now: new Date(2026, 9, 7) });
+
+    assert.equal(context.suggestedBranch, "20261007-1");
+  });
+});
+
+test("suggests no branch on a detached HEAD", async () => {
+  await withRepo(async ({ repoRoot }) => {
+    await git(repoRoot, ["checkout", "--detach"]);
+    const context = await getRepoContext(repoRoot);
+
+    assert.equal(context.suggestedBranch, undefined);
+  });
+});
+
 async function withRepo(
   callback: (fixture: RepoFixture) => Promise<void>,
 ): Promise<void> {

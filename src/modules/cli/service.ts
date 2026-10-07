@@ -814,6 +814,8 @@ Targets resolve by exact branch, exact path, then unique path basename.
 \`shrubby --create <branch>\` opens the terminal UI on the create screen and
 creates the branch without prompting. Add \`--prefill\` to open the create screen
 with the branch filled in for editing instead; press Enter there to create it.
+Without \`--create\`, the menu's create screen is pre-filled with today's date id
+under the current branch prefix, such as \`feat/20261007-1\`.
 `;
 }
 
