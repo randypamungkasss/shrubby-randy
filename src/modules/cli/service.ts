@@ -85,8 +85,102 @@ class CliUsageError extends Error {
   }
 }
 
-export function shouldLaunchTui(args: readonly string[]): boolean {
-  return args.length === 0;
+export type CreateBranchRequest = {
+  readonly autoCreate: boolean;
+  readonly branch: string;
+};
+
+export type TuiLaunchPlan =
+  | {
+      readonly create?: CreateBranchRequest;
+      readonly kind: "tui";
+    }
+  | { readonly kind: "cli" }
+  | { readonly kind: "error"; readonly message: string };
+
+const CREATE_FLAG = "--create";
+const PREFILL_FLAG = "--prefill";
+const CREATE_USAGE = `Usage: shrubby ${CREATE_FLAG} <branch> [${PREFILL_FLAG}]`;
+
+export function planTuiLaunch(args: readonly string[]): TuiLaunchPlan {
+  if (args.length === 0) {
+    return { kind: "tui" };
+  }
+
+  const hasCreateFlag = args.some(
+    (arg) => arg === CREATE_FLAG || arg.startsWith(`${CREATE_FLAG}=`),
+  );
+
+  if (!hasCreateFlag) {
+    if (args.includes(PREFILL_FLAG)) {
+      return {
+        kind: "error",
+        message: `Option '${PREFILL_FLAG}' requires '${CREATE_FLAG} <branch>'.`,
+      };
+    }
+
+    return { kind: "cli" };
+  }
+
+  let branch: string | undefined;
+  let isPrefilled = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === PREFILL_FLAG) {
+      if (isPrefilled) {
+        return { kind: "error", message: CREATE_USAGE };
+      }
+
+      isPrefilled = true;
+      continue;
+    }
+
+    if (arg === CREATE_FLAG) {
+      const value = args[index + 1];
+
+      if (branch !== undefined) {
+        return { kind: "error", message: CREATE_USAGE };
+      }
+
+      if (value === undefined || value.startsWith("-")) {
+        return {
+          kind: "error",
+          message: `Option '${CREATE_FLAG}' requires a branch name.`,
+        };
+      }
+
+      branch = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith(`${CREATE_FLAG}=`)) {
+      if (branch !== undefined) {
+        return { kind: "error", message: CREATE_USAGE };
+      }
+
+      branch = arg.slice(`${CREATE_FLAG}=`.length);
+      continue;
+    }
+
+    return { kind: "error", message: CREATE_USAGE };
+  }
+
+  const trimmedBranch = branch?.trim() ?? "";
+
+  if (trimmedBranch === "") {
+    return {
+      kind: "error",
+      message: `Option '${CREATE_FLAG}' requires a branch name.`,
+    };
+  }
+
+  return {
+    create: { autoCreate: !isPrefilled, branch: trimmedBranch },
+    kind: "tui",
+  };
 }
 
 export async function runCliCommand(
@@ -692,6 +786,7 @@ function getGeneralHelp(): string {
 
 Usage:
   shrubby
+  shrubby --create <branch> [--prefill]
   shrubby --help
   shrubby help [command]
   shrubby cleanup [--dry-run] [--merged] [--stale] [--yes] [--json]
@@ -715,6 +810,10 @@ Commands:
   help [command]     Show help.
 
 Targets resolve by exact branch, exact path, then unique path basename.
+
+\`shrubby --create <branch>\` opens the terminal UI on the create screen and
+creates the branch without prompting. Add \`--prefill\` to open the create screen
+with the branch filled in for editing instead; press Enter there to create it.
 `;
 }
 
