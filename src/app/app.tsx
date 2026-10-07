@@ -123,7 +123,7 @@ export function App({
           copyFeedback={copyState}
           context={repoState.context}
           errorMessage={createState.errorMessage}
-          initialBranch={createPrefill}
+          initialBranch={createPrefill ?? repoState.context.suggestedBranch}
           isCreating={createState.isCreating}
           onSubmit={(branch) => {
             void handleCreate(repoState.context, branch);

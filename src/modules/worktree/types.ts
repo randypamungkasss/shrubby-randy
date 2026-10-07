@@ -6,12 +6,14 @@ export type RepoContext = {
   readonly projectName: string;
   readonly protectedBranch: string;
   readonly protectedBranches: readonly string[];
+  readonly suggestedBranch: string | undefined;
   readonly worktreeRoot: string;
   readonly defaultBranch: string;
 };
 
 export type GetRepoContextOptions = {
   readonly homeDir?: string;
+  readonly now?: Date;
 };
 
 export type WorktreeEntry = {

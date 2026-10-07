@@ -31,10 +31,16 @@ const execFileAsync = promisify(execFile);
 
 export async function getRepoContext(
   cwd = process.cwd(),
-  { homeDir = getHomeDir() }: GetRepoContextOptions = {},
+  { homeDir = getHomeDir(), now = new Date() }: GetRepoContextOptions = {},
 ): Promise<RepoContext> {
   const repoRoot = await getRepoRoot(cwd);
   const projectName = path.basename(repoRoot);
+  const currentBranchOutput = await gitMaybe(repoRoot, [
+    "branch",
+    "--show-current",
+  ]);
+  const currentBranch = currentBranchOutput?.trim() || undefined;
+  const suggestedBranch = await getSuggestedBranch(repoRoot, currentBranch, now);
   const rawConfig = await loadShrubbyConfig(repoRoot, { homeDir });
   const defaultBranch =
     rawConfig.defaultBaseRef ?? (await getDefaultBaseRef(repoRoot));
@@ -61,6 +67,7 @@ export async function getRepoContext(
     projectName,
     protectedBranch,
     protectedBranches,
+    suggestedBranch,
     worktreeRoot,
     defaultBranch,
   };
@@ -315,6 +322,50 @@ export function branchToSlug(branch: string): string {
     .replace(/^-+|-+$/g, "");
 
   return slug.length > 0 ? slug : "worktree";
+}
+
+const BRANCH_ID_PATTERN = /^\d+$/;
+
+async function getSuggestedBranch(
+  repoRoot: string,
+  currentBranch: string | undefined,
+  now: Date,
+): Promise<string | undefined> {
+  if (currentBranch === undefined) {
+    return undefined;
+  }
+
+  const separatorIndex = currentBranch.indexOf("/");
+  const prefix =
+    separatorIndex === -1 ? "" : `${currentBranch.slice(0, separatorIndex)}/`;
+  const dateId = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("");
+  const base = `${prefix}${dateId}`;
+  const { stdout } = await git(repoRoot, [
+    "for-each-ref",
+    "--format=%(refname:short)",
+    "refs/heads/",
+  ]);
+  let highestId = 0;
+
+  for (const branch of stdout.split("\n")) {
+    const name = branch.trim();
+
+    if (!name.startsWith(`${base}-`)) {
+      continue;
+    }
+
+    const suffix = name.slice(base.length + 1);
+
+    if (BRANCH_ID_PATTERN.test(suffix)) {
+      highestId = Math.max(highestId, Number(suffix));
+    }
+  }
+
+  return `${base}-${highestId + 1}`;
 }
 
 async function getAvailableWorktreePath(
