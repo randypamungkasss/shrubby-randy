@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWindowSize } from "ink";
 import { FullscreenFrame } from "../components/fullscreen-frame.js";
 import { MainMenu } from "../modules/main-menu/view.js";
@@ -25,6 +25,11 @@ import {
 import { useExitKeys } from "./use-exit-keys.js";
 
 type Screen = "menu" | "create" | "list";
+
+export type AppProps = {
+  readonly initialCreateBranch?: string;
+  readonly shouldAutoCreate?: boolean;
+};
 
 type RepoState =
   | {
@@ -54,12 +59,17 @@ type RemoveState = {
 
 type CopyState = CopyFeedback;
 
-export function App() {
+export function App({
+  initialCreateBranch,
+  shouldAutoCreate = true,
+}: AppProps = {}) {
   const { columns, rows } = useWindowSize();
   const [screen, setScreen] = useState<Screen>("menu");
   const [repoState, setRepoState] = useState<RepoState>({ status: "loading" });
   const [statusMessage, setStatusMessage] = useState<string | undefined>();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [createPrefill, setCreatePrefill] = useState(initialCreateBranch);
+  const hasAppliedLaunch = useRef(false);
   const [createState, setCreateState] = useState<CreateState>({
     isCreating: false,
   });
@@ -82,6 +92,7 @@ export function App() {
         : () => {
             setScreen("menu");
             setCreateState({ isCreating: false });
+            setCreatePrefill(undefined);
             setRemoveState({ isRemoving: false });
             setCopyState({ isCopying: false });
           },
@@ -112,6 +123,7 @@ export function App() {
           copyFeedback={copyState}
           context={repoState.context}
           errorMessage={createState.errorMessage}
+          initialBranch={createPrefill}
           isCreating={createState.isCreating}
           onSubmit={(branch) => {
             void handleCreate(repoState.context, branch);
@@ -153,11 +165,25 @@ export function App() {
         worktrees,
       });
       setStatusMessage(nextStatusMessage);
+      await applyLaunchRequest(context);
     } catch (error) {
       setRepoState({
         status: "error",
         message: getErrorMessage(error),
       });
+    }
+  }
+
+  async function applyLaunchRequest(context: RepoContext): Promise<void> {
+    if (initialCreateBranch === undefined || hasAppliedLaunch.current) {
+      return;
+    }
+
+    hasAppliedLaunch.current = true;
+    setScreen("create");
+
+    if (shouldAutoCreate) {
+      await handleCreate(context, initialCreateBranch);
     }
   }
 
@@ -193,6 +219,7 @@ export function App() {
   ): Promise<void> {
     setStatusMessage(undefined);
     setCreateState({ isCreating: false });
+    setCreatePrefill(undefined);
     setRemoveState({ isRemoving: false });
     setCopyState({ isCopying: false });
 
@@ -348,7 +375,7 @@ function getFooter(repoStatus: RepoState["status"], screen: Screen): string {
   }
 
   if (screen === "create") {
-    return "Type branch | Enter create | Esc back | Ctrl-C exit | shrubby";
+    return "Type branch | Ctrl-U clear | Enter create | Esc back | Ctrl-C exit | shrubby";
   }
 
   if (screen === "list") {

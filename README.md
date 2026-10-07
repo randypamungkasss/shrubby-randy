@@ -39,6 +39,8 @@ Command usage:
 
 ```sh
 shrubby --help
+shrubby --create feature/auth
+shrubby --create feature/auth --prefill
 shrubby list
 shrubby list --json
 shrubby create feature/auth
@@ -59,6 +61,18 @@ path, then unique path basename. Human output is the default; supported commands
 also accept `--json` for scripts. `remove` prompts with `y/N` in an interactive
 terminal and requires `--yes` when stdin is not interactive. Dirty worktrees
 require `--force-dirty`.
+
+`shrubby` with no arguments opens the terminal UI. `shrubby --create <branch>`
+opens the same UI directly on the create screen and creates the branch without
+typing, which is useful for bindings that pass a branch name:
+
+```sh
+shrubby --create "$(git rev-parse --abbrev-ref HEAD)-review"
+```
+
+Add `--prefill` to open the create screen with the branch filled in but not
+created, so it can be edited before pressing Enter. `Ctrl-U` clears the field.
+Without `--create`, the same screen is reachable from the menu and starts empty.
 
 Copy uses available clipboard targets for the current environment: `pbcopy` on
 macOS, `wl-copy`/`xclip`/`xsel` on Linux desktops, `clip.exe`/`powershell.exe`

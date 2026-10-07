@@ -7,8 +7,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { promisify } from "node:util";
 import {
+  planTuiLaunch,
   runCliCommand,
-  shouldLaunchTui,
   type CliInput,
   type RunCliCommandOptions,
 } from "./service.js";
@@ -26,9 +26,59 @@ import type {
 const execFileAsync = promisify(execFile);
 
 test("routes no args to the TUI and explicit args to commands", () => {
-  assert.equal(shouldLaunchTui([]), true);
-  assert.equal(shouldLaunchTui(["--help"]), false);
-  assert.equal(shouldLaunchTui(["list"]), false);
+  assert.deepEqual(planTuiLaunch([]), { kind: "tui" });
+  assert.deepEqual(planTuiLaunch(["--help"]), { kind: "cli" });
+  assert.deepEqual(planTuiLaunch(["list"]), { kind: "cli" });
+});
+
+test("routes --create to the TUI with the branch preloaded", () => {
+  const expected = {
+    create: { autoCreate: true, branch: "feature/auth" },
+    kind: "tui",
+  };
+
+  assert.deepEqual(planTuiLaunch(["--create", "feature/auth"]), expected);
+  assert.deepEqual(planTuiLaunch(["--create=feature/auth"]), expected);
+  assert.deepEqual(planTuiLaunch(["--create", "  feature/auth  "]), expected);
+});
+
+test("routes --prefill to the TUI without creating immediately", () => {
+  const expected = {
+    create: { autoCreate: false, branch: "feature/auth" },
+    kind: "tui",
+  };
+
+  assert.deepEqual(
+    planTuiLaunch(["--create", "feature/auth", "--prefill"]),
+    expected,
+  );
+  assert.deepEqual(
+    planTuiLaunch(["--prefill", "--create", "feature/auth"]),
+    expected,
+  );
+  assert.deepEqual(
+    planTuiLaunch(["--create=feature/auth", "--prefill"]),
+    expected,
+  );
+});
+
+test("rejects malformed --create invocations", () => {
+  for (const args of [
+    ["--create"],
+    ["--create", ""],
+    ["--create", "--json"],
+    ["--create", "a", "b"],
+    ["--create", "a", "--create", "b"],
+    ["--create=a", "--create=b"],
+    ["--prefill"],
+    ["--prefill", "--prefill", "--create", "a"],
+    ["--create", "a", "--prefill", "b"],
+    ["--create", "a", "--prefill", "--prefill"],
+  ]) {
+    const plan = planTuiLaunch(args);
+
+    assert.equal(plan.kind, "error", `expected error for ${args.join(" ")}`);
+  }
 });
 
 test("prints global and command help", async () => {

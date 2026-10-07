@@ -111,6 +111,7 @@ export type CreateWorktreeScreenProps = {
   readonly copyFeedback?: CopyFeedback;
   readonly context: RepoContext;
   readonly errorMessage?: string;
+  readonly initialBranch?: string;
   readonly isCreating: boolean;
   readonly onSubmit: (branch: string) => void;
   readonly result?: CreateWorktreeResult;

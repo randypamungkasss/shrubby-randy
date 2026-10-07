@@ -27,11 +27,12 @@ export function CreateWorktreeScreen({
   context,
   copyFeedback,
   errorMessage,
+  initialBranch,
   isCreating,
   onSubmit,
   result,
 }: CreateWorktreeScreenProps) {
-  const [branch, setBranch] = useState("");
+  const [branch, setBranch] = useState(initialBranch ?? "");
 
   useTextInput({
     isEnabled: !isCreating && result === undefined,
@@ -447,6 +448,11 @@ function useTextInput({
 
     if (key.backspace || key.delete) {
       onChange(value.slice(0, -1));
+      return;
+    }
+
+    if (key.ctrl && input === "u") {
+      onChange("");
       return;
     }
 
